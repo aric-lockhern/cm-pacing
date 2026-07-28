@@ -1115,11 +1115,13 @@ function openSettings(){
     document.getElementById('budgetMap').style.display = 'block';
     document.getElementById('tabMsg').textContent = 'saved — Load tabs to change';
   }
-  if(CFG.budgetLabelCol!==undefined && CFG.budgetLabelCol!=='')
-    document.getElementById('setLabelColL').value = indexToColLetter(CFG.budgetLabelCol);
-  if(CFG.budgetAmountCol!==undefined && CFG.budgetAmountCol!=='')
-    document.getElementById('setBudgetColL').value = indexToColLetter(CFG.budgetAmountCol);
-  if(CFG.budgetPlatform) document.getElementById('setBudPlat').value = CFG.budgetPlatform;
+  // restore the saved column mapping (per channel) so it shows without re-loading tabs
+  const setColL = (id,spec)=>{ if(spec!==undefined && spec!==''){
+    document.getElementById(id).value = String(spec).split(',').map(x=>indexToColLetter(Number(x.trim()))).join(','); } };
+  setColL('setLabelColL', CFG.budgetLabelCol);
+  setColL('setGoogleColL', CFG.budgetGoogleCol);
+  setColL('setLsaColL', CFG.budgetLSACol);
+  setColL('setMetaColL', CFG.budgetMetaCol);
   document.getElementById('syncMsg').textContent =
     CFG.lastBudgetSync ? `last auto-sync ${CFG.lastBudgetSync}` : 'no auto-sync yet';
   document.getElementById('setName').value = LS.name();
