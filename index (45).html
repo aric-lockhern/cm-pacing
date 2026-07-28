@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content Massive · Pacing</title>
+<style>
+  :root{
+    --bg:#f7f7f9; --panel:#ffffff; --panel2:#f2f2f5; --line:#e4e4ea;
+    --ink:#2b2a35; --muted:#6c6b78; --faint:#9a99a6;
+    --accent:#f26722; --good:#1f9d5b; --warn:#c07d12; --bad:#d64535;
+    --chip:#f0f0f3;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.4}
+  a{color:var(--accent);text-decoration:none}
+  header{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+  .brand{font-weight:700;letter-spacing:.2px;font-size:16px}
+  .brand span{color:var(--accent)}
+  .chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--chip);color:var(--muted);border:1px solid var(--line)}
+  .chip.live{color:var(--good);border-color:#bfe6cf}
+  .chip.err{color:var(--bad);border-color:#f0c4bf}
+  .grow{flex:1}
+  button{font-family:var(--font);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 11px;cursor:pointer}
+  button:hover{border-color:var(--faint)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.ghost{background:transparent}
+  main{padding:18px 20px 60px;max-width:1500px;margin:0 auto}
+
+  /* integrity strip */
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:8px}
+  .tcell{background:var(--panel);padding:13px 15px}
+  .tcell .lab{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .tcell .val{font-size:22px;font-weight:650;margin-top:3px;font-variant-numeric:tabular-nums}
+  .tcell .sub{font-size:12px;color:var(--faint);margin-top:2px}
+  .tcell.headline{background:var(--panel2)}
+  .pacebar{height:6px;border-radius:4px;background:#ececf0;margin-top:9px;overflow:hidden}
+  .pacebar>i{display:block;height:100%}
+  .integrity-note{font-size:12px;color:var(--muted);margin:6px 2px 18px}
+
+  .toolbar{display:flex;gap:8px;align-items:center;margin:14px 0 10px;flex-wrap:wrap}
+  .toolbar input,.toolbar select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 9px;font-size:13px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg button{border:0;border-radius:0;background:transparent;color:var(--muted)}
+  .seg button.on{background:var(--panel2);color:var(--ink)}
+
+  /* alerts */
+  .alerts{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+  .budgetbanner{border:1px solid var(--accent);background:#fff6f0;border-radius:10px;padding:11px 14px;margin-bottom:14px}
+  .budgetbanner .bb-h{font-weight:700;color:var(--accent);font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:7px}
+  .budgetbanner .bb-row{font-size:13px;padding:2px 0;color:var(--ink)}
+  .budgetbanner .bb-row .d{color:var(--muted);font-size:12px}
+  .budgetbanner .up{color:var(--good)} .budgetbanner .down{color:var(--bad)}
+  .budgetbanner .bb-h{display:flex;align-items:center}
+  .budgetbanner .bb-row{display:flex;align-items:center;gap:5px}
+  .bb-x{margin-left:auto;color:var(--faint);cursor:pointer;font-size:12px;padding:1px 7px;border-radius:5px;white-space:nowrap}
+  .bb-x:hover{color:var(--accent);background:#ffe8db}
+  .alert{display:flex;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+  .alert .ic{font-size:15px}
+  .alert.crit{border-color:#f0c4bf;background:#fdf3f2}
+  .alert.budget{border-color:#cfd6e0;background:#f6f8fb}
+  .alert.warn{border-color:#ecd6a6;background:#fdfaf2}
+  .alert.grow{border-color:#bfe6cf;background:#f3fbf6}
+  .alert .txt{flex:1}
+  .alert .txt b{color:var(--ink)}
+  .alert small{color:var(--muted)}
+  .x{color:var(--faint);cursor:pointer;padding:2px 6px;border-radius:5px}
+  .x:hover{color:var(--ink);background:var(--panel2)}
+
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600;cursor:help;user-select:none}
+  th:hover{color:var(--ink)}
+  tbody tr:hover{background:var(--panel)}
+  .fr{display:flex;align-items:center;gap:8px}
+  .fr .name{font-weight:600;cursor:pointer}
+  .fr .name:hover{color:var(--accent)}
+  .badge{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--line)}
+  .b-crit{color:var(--bad);border-color:#f0c4bf}
+  .b-budget{color:var(--muted);border-color:#cfd6e0}
+  .b-warn{color:var(--warn);border-color:#ecd6a6}
+  .b-grow{color:var(--good);border-color:#bfe6cf}
+  .b-fixed{color:var(--muted)}
+  .pace{font-weight:600}
+  .pos{color:var(--good)} .neg{color:var(--bad)} .mid{color:var(--warn)}
+  .muted{color:var(--muted)}
+  .type-pill{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;cursor:pointer}
+  .mgr{font-size:12px;color:var(--muted);cursor:pointer}
+  .flag{cursor:pointer;color:var(--faint)}
+  .flag:hover{color:var(--accent)}
+  .budcell{cursor:text}
+  .budcell:hover{outline:1px solid var(--line);border-radius:4px}
+
+  /* modal */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:20;padding:20px}
+  .scrim.on{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;max-width:820px;width:100%;max-height:86vh;overflow:auto;padding:20px}
+  .modal h2{margin:0 0 2px}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:14px 0}
+  .kv .c{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px}
+  .kv .c .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .kv .c .v{font-size:18px;font-weight:600;margin-top:3px}
+  canvas{width:100%;height:240px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;margin-top:8px}
+  .ddctrls{display:flex;gap:8px;align-items:center;margin:16px 0 6px;flex-wrap:wrap}
+  .ddtbl{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;font-variant-numeric:tabular-nums}
+  .ddtbl th,.ddtbl td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right}
+  .ddtbl th:first-child,.ddtbl td:first-child{text-align:left}
+  .ddtbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
+  .ddtbl tfoot td{font-weight:700;border-bottom:0}
+  .trends{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap}
+  .trends div{font-size:13px;color:var(--muted)}
+  .close{float:right}
+  .settings-row{display:flex;gap:10px;align-items:center;margin:8px 0;flex-wrap:wrap}
+  .settings-row label{width:150px;color:var(--muted);font-size:13px}
+  .settings-row input{flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 9px}
+  .hint{font-size:12px;color:var(--faint);margin:2px 0 12px}
+  .empty{padding:60px 20px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Franchise <span>Pacing</span></div>
+  <div class="seg" id="channelSeg" style="margin-left:6px">
+    <button data-ch="google" onclick="setChannel('google')">Google Ads</button>
+    <button data-ch="lsa" onclick="setChannel('lsa')">LSA</button>
+    <button data-ch="meta" onclick="setChannel('meta')">Meta</button>
+  </div>
+  <div id="statusChip" class="chip">connecting…</div>
+  <div class="grow"></div>
+  <button class="ghost" onclick="openSettings()">Settings</button>
+  <button class="ghost" onclick="load(true)">Refresh</button>
+</header>
+
+<main>
+  <div id="totals" class="totals"></div>
+  <div id="integrityNote" class="integrity-note"></div>
+
+  <div id="budgetBanner"></div>
+  <div id="alerts" class="alerts"></div>
+
+  <div class="toolbar">
+    <input id="search" placeholder="Filter franchises…" oninput="render()">
+    <div class="seg" id="viewSeg">
+      <button data-v="active" class="on" onclick="setView('active')">Active</button>
+      <button data-v="problems" onclick="setView('problems')">Problems</button>
+      <button data-v="all" onclick="setView('all')">Show all</button>
+    </div>
+    <div class="seg" id="markupSeg">
+      <button data-mk="0" onclick="setMarkup(false)">Ad spend</button>
+      <button data-mk="1" onclick="setMarkup(true)">With markup</button>
+    </div>
+    <div class="grow"></div>
+    <span class="muted" id="monthLabel"></span>
+  </div>
+
+  <table id="tbl">
+    <thead><tr>
+      <th onclick="sortBy('name')" title="The account (location). Click the name to open its performance detail.">Franchise</th>
+      <th onclick="sortBy('type')" title="Lead-gen or e-comm. Click the pill in a row to switch it.">Type</th>
+      <th onclick="sortBy('live')" title="Active if at least one campaign is enabled and not ended; otherwise paused.">Status</th>
+      <th onclick="sortBy('spend')" title="Actual ad spend this month to date, across Google and Meta. Platform spend only — no agency fee." id="hSpend">MTD Ad Spend</th>
+      <th onclick="sortBy('projected')" title="Where the month actually finishes if the campaigns keep spending their current daily budget: MTD spend + (daily budget × days left).">Projected</th>
+      <th onclick="sortBy('target')" title="Ad spend we should place this month = total client budget minus our fee (Google 25%, Meta 20%). Click to set a budget manually." id="hTarget">Ad Spend Target</th>
+      <th onclick="sortBy('dailyBudget')" title="Sum of the daily budgets set on this account's enabled Google Ads campaigns. Shared budgets counted once; ended campaigns excluded. Red = below what's needed, amber = above." id="hDaily">Daily Budget</th>
+      <th onclick="sortBy('reqDaily')" title="Ad spend per remaining day (including today) needed to finish the month exactly on target. Compare against Daily Budget.">Needed/Day</th>
+      <th onclick="sortBy('pace')" title="MTD ad spend vs what should have been spent by today. 100% = on track, over = spending too fast.">Pace</th>
+      <th onclick="sortBy('onTarget')" title="Projected finish as a share of the ad spend target. 100% = lands on budget. This is the bottom line — green means the current daily budget gets there.">On Target</th>
+      <th onclick="sortBy('conv')" title="Leads recorded this month to date.">Leads</th>
+      <th onclick="sortBy('cpa')" title="Cost per lead this month = MTD ad spend divided by leads.">CPL</th>
+      <th title="Email these numbers, plus a note, to your flag recipients."></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="emptyState" class="empty" style="display:none"></div>
+</main>
+
+<!-- deep dive -->
+<div class="scrim" id="ddScrim" onclick="if(event.target===this)closeDD()">
+  <div class="modal" id="ddBody"></div>
+</div>
+<!-- flag / email -->
+<div class="scrim" id="flagScrim" onclick="if(event.target===this)closeFlag()">
+  <div class="modal" style="max-width:580px">
+    <h2 style="margin-bottom:2px">Flag account</h2>
+    <div class="muted" id="flagWho" style="font-size:13px"></div>
+    <div style="margin:16px 0 6px;font-size:13px;font-weight:600">What should they look at?</div>
+    <textarea id="flagNote" rows="4" placeholder="e.g. CPL climbing three weeks straight — worth reviewing search terms."
+      style="width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 12px;font:14px var(--font);resize:vertical"></textarea>
+    <div class="hint" id="flagIncludes" style="margin-top:10px"></div>
+    <div class="settings-row" style="margin-top:6px"><label></label>
+      <button class="primary" id="flagSend" onclick="sendFlag()">Send email</button>
+      <button class="ghost" onclick="closeFlag()">Cancel</button>
+      <span id="flagMsg" class="muted" style="font-size:12px"></span>
+    </div>
+  </div>
+</div>
+<!-- settings -->
+<div class="scrim" id="setScrim" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <button class="close ghost" onclick="closeSettings()">Close</button>
+    <h2>Settings</h2>
+    <div class="hint">Fee rates and the budget sheet are shared by the whole team (saved to the sheet). Gateway URL, secret, and your name are personal to this browser.</div>
+
+    <h3 style="margin:14px 0 4px">Margin</h3>
+    <div class="settings-row"><label>Google / search fee</label><input id="setGFee" type="number" step="0.5" min="0" max="90"> <span class="muted">%</span></div>
+    <div class="settings-row"><label>Meta fee</label><input id="setMFee" type="number" step="0.5" min="0" max="90"> <span class="muted">%</span></div>
+    <div class="settings-row"><label>LSA fee</label><input id="setLFee" type="number" step="0.5" min="0" max="90"> <span class="muted">%</span></div>
+    <div class="hint">Ad spend target = approved budget × (1 − fee). A 25% fee leaves 75% for the platform.</div>
+
+    <h3 style="margin:14px 0 4px">Budgets</h3>
+    <div class="settings-row"><label>Budget sheet URL</label><input id="setBudUrl" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
+    <div class="settings-row"><label></label>
+      <button onclick="loadBudgetTabs()">Load tabs</button>
+      <span id="tabMsg" class="muted"></span>
+    </div>
+    <div id="tabPick" class="settings-row" style="display:none"><label>Which tab</label>
+      <select id="setBudTab" onchange="loadBudgetColumns()"></select>
+      <span id="colMsg" class="muted"></span>
+    </div>
+    <div id="budgetMap" style="display:none">
+      <div class="settings-row"><label>Account column</label>
+        <input id="setLabelColL" placeholder="A" style="max-width:80px;text-transform:uppercase" oninput="previewCol('label','setLabelColL','labelColInfo')">
+        <span id="labelColInfo" class="muted" style="font-size:12px"></span>
+      </div>
+      <div class="settings-row"><label>Google budget col</label>
+        <input id="setGoogleColL" placeholder="e.g. G" style="max-width:80px;text-transform:uppercase" oninput="previewCol('g','setGoogleColL','gColInfo')">
+        <span id="gColInfo" class="muted" style="font-size:12px;flex:1"></span>
+        <button onclick="syncChannel('google')">Sync</button>
+      </div>
+      <div class="settings-row"><label>LSA budget cols</label>
+        <input id="setLsaColL" placeholder="e.g. M,N,O" style="max-width:120px;text-transform:uppercase" oninput="previewCol('lsa','setLsaColL','lColInfo')">
+        <span id="lColInfo" class="muted" style="font-size:12px;flex:1"></span>
+        <button onclick="syncChannel('lsa')">Sync</button>
+      </div>
+      <div class="settings-row"><label>Meta budget col</label>
+        <input id="setMetaColL" placeholder="e.g. R" style="max-width:80px;text-transform:uppercase" oninput="previewCol('m','setMetaColL','mColInfo')">
+        <span id="mColInfo" class="muted" style="font-size:12px;flex:1"></span>
+        <button onclick="syncChannel('meta')">Sync</button>
+      </div>
+      <div class="settings-row"><label></label>
+        <button class="primary" onclick="syncAllChannels()">Sync all channels</button>
+        <span id="syncMsg" class="muted"></span>
+      </div>
+    </div>
+    <div class="hint">One account column (e.g. <b>A</b>), then the budget column for each channel by letter. <b>LSA takes a comma-separated list</b> (e.g. <b>M,N,O</b>) — the tool sums those months into one running pool and paces the leftover forward. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Each month, add the new month's letter (Google/Meta swap it, LSA append it). Share the sheet with the account that runs the gateway.</div>
+
+    <h3 style="margin:14px 0 4px">Alerts</h3>
+    <div class="hint">Flags compare the last 30 days against the previous 30 days. If leads drop but spend dropped about as much, it's treated as a light "budget" note, not a real problem. Higher percentages = fewer, stronger alerts.</div>
+    <div class="settings-row"><label>Min leads to judge</label><input id="setMinLeads" type="number" step="1" min="0"> <span class="muted" style="font-size:12px">skip accounts below this prior-30-day volume (kills noise)</span></div>
+    <div class="settings-row"><label>Leads drop — warn</label><input id="setLeadsWarn" type="number" step="1" min="0"> <span class="muted">%</span></div>
+    <div class="settings-row"><label>Leads drop — critical</label><input id="setLeadsCrit" type="number" step="1" min="0"> <span class="muted">%</span></div>
+    <div class="settings-row"><label>CPL rise — warn</label><input id="setCplWarn" type="number" step="1" min="0"> <span class="muted">%</span></div>
+    <div class="settings-row"><label>CPL rise — critical</label><input id="setCplCrit" type="number" step="1" min="0"> <span class="muted">%</span></div>
+
+    <h3 style="margin:14px 0 4px">Flag email</h3>
+    <div class="settings-row"><label>Send flags to</label><input id="setEmailTo" placeholder="larry@contentmassive.com, manuel@contentmassive.com"></div>
+    <div class="hint">The ⚑ flag button emails these recipients a summary of the account's numbers. Comma-separate multiple addresses.</div>
+
+    <h3 style="margin:14px 0 4px">This browser</h3>
+    <div class="settings-row"><label>Your name</label><input id="setName" placeholder="Jane Doe"> <span class="muted" style="font-size:12px">signs your flag emails</span></div>
+    <div class="settings-row"><label>Gateway URL</label><input id="setUrl" placeholder="leave blank to use default"></div>
+    <div class="settings-row"><label>Shared secret</label><input id="setSecret" placeholder="leave blank to use default"></div>
+
+    <div class="settings-row" style="margin-top:16px"><label></label>
+      <button class="primary" onclick="saveSettings()">Save</button>
+      <button class="ghost" onclick="closeSettings()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════ CONFIG — replace these two per agency ═══════════════ */
+const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
+const DEFAULT_SECRET     = 'fp_7Kq2mZ9xLw4vRt';
+const BRAND              = 'Franchise';   // header word before "Pacing"
+/* ═════════════════════════════════════════════════════════════════════ */
+
+const LS = {
+  url:    () => localStorage.getItem('pace_url')    || DEFAULT_WEBAPP_URL,
+  secret: () => localStorage.getItem('pace_secret') || DEFAULT_SECRET,
+  name:   () => localStorage.getItem('pace_name')   || '',
+  sort:   () => localStorage.getItem('pace_sort')   || 'pace',
+  view:   () => localStorage.getItem('pace_view')   || 'active',
+};
+
+let DATA = null;       // raw from gateway
+let MODEL = [];        // computed per-franchise rows
+let CFG = { googleFee:0.25, metaFee:0.20, budgetSheetUrl:'' };
+let MARKUP = localStorage.getItem('pace_markup')==='1';
+let CHANNEL = localStorage.getItem('pace_channel') || 'google';
+function setChannel(ch){
+  if(CHANNEL===ch) return;
+  CHANNEL = ch; localStorage.setItem('pace_channel', ch);
+  closeDD();
+  if(DATA){ build(); render(); if(ch==='google') setTimeout(()=>prefetchCampaigns(), 30); }
+}
+// Gross-up factor: turns ad spend into what the client is billed.
+// Uses each account's own budget split (gross ÷ ad-spend target), so a mixed
+// Google 25% / Meta 20% account grosses up exactly right.
+function gfx(r){
+  if(!MARKUP) return 1;
+  if(r && r.adTarget>0 && r.gross>0) return r.gross/r.adTarget;
+  const fee = Number(CFG.googleFee)||0;
+  return fee<1 ? 1/(1-fee) : 1;
+}
+function setMarkup(on){ MARKUP=!!on; localStorage.setItem('pace_markup', on?'1':'0'); render(); if(DD.k) renderDD(); }
+let sortKey = LS.sort();
+let sortDir = -1;
+let view = LS.view();
+const now = new Date();
+// Everything is AS OF YESTERDAY — today is still running, so its partial numbers
+// would make every account look like it's underpacing.
+const ASOF = (()=>{ const d=new Date(); d.setDate(d.getDate()-1); return d; })();
+const MONTH = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+const DAYS_IN_MONTH = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+const DAY_OF_MONTH  = now.getDate();
+const DAYS_ELAPSED  = Math.max(0, DAY_OF_MONTH - 1);          // complete days so far
+const ELAPSED_FRAC  = DAYS_ELAPSED / DAYS_IN_MONTH;
+const DAYS_LEFT     = Math.max(0, DAYS_IN_MONTH - DAYS_ELAPSED);   // today + rest of month
+
+/* ── JSONP ─────────────────────────────────────────────────────────── */
+let jsonpN = 0;
+function call(params){
+  return new Promise((resolve,reject)=>{
+    const cb = '__pace_cb_'+(jsonpN++);
+    const t = setTimeout(()=>{cleanup();reject(new Error('timeout'));}, 45000);
+    function cleanup(){ clearTimeout(t); delete window[cb]; s.remove(); }
+    window[cb] = (data)=>{ cleanup(); resolve(data); };
+    const q = new URLSearchParams(Object.assign({secret:LS.secret(),callback:cb}, params));
+    const s = document.createElement('script');
+    s.src = LS.url() + '?' + q.toString();
+    s.onerror = ()=>{cleanup();reject(new Error('network'));};
+    document.body.appendChild(s);
+  });
+}
+
+/* ── load + compute ────────────────────────────────────────────────── */
+async function load(fresh){
+  setStatus('loading','loading…');
+  PREFETCHED = false;
+  try{
+    const d = await call(fresh ? {action:'data', fresh:'1'} : {action:'data'});
+    if(!d || d.ok===false) throw new Error(d && d.error || 'no data');
+    DATA = d;
+    CFG = Object.assign(CFG, d.config||{});
+    build();
+    setStatus('live','Live');
+    render();
+    if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
+  }catch(e){
+    setStatus('err','Offline — check Settings');
+    console.error(e);
+  }
+}
+
+function setStatus(cls,txt){
+  const c = document.getElementById('statusChip');
+  c.className = 'chip ' + (cls==='live'?'live':cls==='err'?'err':'');
+  c.textContent = txt;
+}
+
+const key = s => String(s||'').trim().toLowerCase();
+
+// which channel's data + rules to use
+function channelCfg(){
+  if(CHANNEL==='lsa')  return { platform:'LSA',    fee:Number(CFG.lsaFee)||0,  mode:'burndown', budgetMonth:'pool', feedRows:DATA.lsa||[], dailyRows:DATA.dailyLsa||[], dailyCols:['Spend',null,'Conv',null], hasBudgets:true };
+  if(CHANNEL==='meta') return { platform:'Meta',   fee:Number(CFG.metaFee)||0, mode:'monthly',  budgetMonth:MONTH, feedRows:[],           dailyRows:DATA.metaDaily||[], dailyCols:['Spend','Clicks','Leads/Conv','Revenue'], hasBudgets:true, campaignCol:'Campaign' };
+  return                      { platform:'Google', fee:Number(CFG.googleFee)||0,mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.google||[],dailyRows:DATA.dailyG||[],    dailyCols:['Spend','Clicks','Conv','Revenue'], hasBudgets:true };
+}
+
+function build(){
+  const CH = channelCfg();
+  const fee1 = 1 - CH.fee;
+  const asofIso = isoLocal(ASOF);
+
+  const G = groupBy(DATA.groups||[], r=>key(r.Label));
+  const dismiss = {};
+  (DATA.dismissals||[]).forEach(r=>{ dismiss[key(r.Label)] = r.Until; });
+
+  // budgets for THIS channel only (platform match; LSA uses the 'pool' row)
+  const bud = {}; // label -> gross budget
+  (DATA.budgets||[]).forEach(r=>{
+    if(key(r.Platform)!==key(CH.platform)) return;
+    if(String(r.Month).trim() !== CH.budgetMonth) return;
+    const k = key(r.Label);
+    bud[k] = (bud[k]||0) + (Number(r['Total Budget'])||0);
+    bud['__disp__'+k] = String(r.Label).trim();
+  });
+
+  // feed (status + Google daily budget)
+  const feed = {};
+  CH.feedRows.forEach(r=>{ feed[key(r.Label)] = {
+    status:String(r.Status||'').toLowerCase(),
+    dailyBudget:Number(r.DailyBudget)||0 }; });
+
+  // daily series for this channel: label -> date -> {spend,conv,rev,clicks}
+  const dailyByLabel = {}, campByLabel = {};
+  const [cSpend,cClicks,cConv,cRev] = CH.dailyCols;
+  CH.dailyRows.forEach(r=>{
+    const k = key(r.Label); const d = String(r.Date).slice(0,10); if(!d) return;
+    dailyByLabel[k] = dailyByLabel[k] || {};
+    const o = dailyByLabel[k][d] = dailyByLabel[k][d] || {spend:0,conv:0,rev:0,clicks:0};
+    o.spend  += Number(r[cSpend])||0;
+    o.conv   += cConv ? (Number(r[cConv])||0) : 0;
+    o.rev    += cRev ? (Number(r[cRev])||0) : 0;
+    o.clicks += cClicks ? (Number(r[cClicks])||0) : 0;
+    if(CH.campaignCol){
+      const c = String(r[CH.campaignCol]||'—').trim()||'—';
+      campByLabel[k]=campByLabel[k]||{}; campByLabel[k][c]=campByLabel[k][c]||{};
+      const oc = campByLabel[k][c][d] = campByLabel[k][c][d] || {spend:0,conv:0,rev:0,clicks:0};
+      oc.spend+=Number(r[cSpend])||0; oc.conv+=cConv?(Number(r[cConv])||0):0;
+      oc.rev+=cRev?(Number(r[cRev])||0):0; oc.clicks+=cClicks?(Number(r[cClicks])||0):0;
+    }
+  });
+
+  // LSA burn-down window: last N months (N = number of budget columns summed)
+  const lsaMonths = Math.max(1, Number(CFG.lsaMonths)||1);
+  const lsaWinStart = (()=>{ const d=new Date(now.getFullYear(), now.getMonth()-(lsaMonths-1), 1); return isoLocal(d); })();
+  const lsaWinTotalDays = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), e=new Date(now.getFullYear(), now.getMonth()+1, 0); return Math.round((e-s)/864e5)+1; })();
+  const lsaWinElapsed = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), a=new Date(asofIso+'T00:00:00'); return Math.max(0, Math.round((a-s)/864e5)+1); })();
+
+  const labels = new Set();
+  Object.keys(bud).forEach(k=>{ if(!k.startsWith('__disp__')) labels.add(k); });
+  Object.keys(feed).forEach(k=>labels.add(k));
+  Object.keys(dailyByLabel).forEach(k=>labels.add(k));
+  (DATA.groups||[]).forEach(r=>labels.add(key(r.Label)));
+
+  MODEL = [];
+  labels.forEach(k=>{
+    const meta = G[k] && G[k][0] || {};
+    const disp = bud['__disp__'+k] || meta.Label || feedName(CH,k) || titleize(k);
+    const series = dailyByLabel[k] || {};
+    const gross = bud[k] || 0;
+    const adTarget = gross * fee1;
+    const feeAmt = gross - adTarget;
+    const f = feed[k] || {status:'', dailyBudget:0};
+    const type = (meta.Type||'').toLowerCase()==='e-comm' ? 'e-comm' : 'lead-gen';
+    const hidden = String(meta.Hidden||'').toLowerCase()==='true' || meta.Hidden===true;
+    const live = f.status !== 'paused';
+
+    let spend, conv, rev, expectedToDate, projected, reqDaily, dailyTarget, pace, runRate=0;
+
+    if(CH.mode==='burndown'){
+      // cumulative over the rollover window
+      spend=0; conv=0; rev=0;
+      for(const d in series){ if(d>=lsaWinStart && d<=asofIso){ spend+=series[d].spend; conv+=series[d].conv; rev+=series[d].rev; } }
+      const remainDays = Math.max(1, lsaWinTotalDays - lsaWinElapsed);
+      dailyTarget   = adTarget / lsaWinTotalDays;
+      expectedToDate= adTarget * (lsaWinElapsed / lsaWinTotalDays);
+      const dailyRate = lsaWinElapsed>0 ? spend/lsaWinElapsed : 0;
+      projected     = spend + dailyRate*remainDays;
+      reqDaily      = Math.max(0, adTarget - spend)/remainDays;
+      pace          = expectedToDate>0 ? spend/expectedToDate : (spend>0?Infinity:0);
+    } else {
+      // monthly, complete days only
+      spend=0; conv=0; rev=0;
+      for(const d in series){ if(d.slice(0,7)===MONTH && d<=asofIso){ spend+=series[d].spend; conv+=series[d].conv; rev+=series[d].rev; } }
+      expectedToDate = adTarget * ELAPSED_FRAC;
+      runRate = ELAPSED_FRAC>0 ? spend/ELAPSED_FRAC : 0;
+      dailyTarget = adTarget / DAYS_IN_MONTH;
+      reqDaily = DAYS_LEFT>0 ? Math.max(0, adTarget - spend)/DAYS_LEFT : 0;
+      projected = (f.dailyBudget>0) ? spend + f.dailyBudget*DAYS_LEFT : runRate;
+      pace = expectedToDate>0 ? spend/expectedToDate : (spend>0?Infinity:0);
+    }
+
+    const cpa = conv>0 ? spend/conv : 0;
+    const roas = (type==='e-comm' && spend>0) ? rev/spend : 0;
+    const onTarget = adTarget>0 ? projected/adTarget : 0;
+    const delta = projected - adTarget;
+
+    const alert = detectAlert(series, dismiss[k]);
+    const corrected = correctionBadge(series, pace);
+
+    MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
+      projected, onTarget, pace, delta,
+      conv, cpa, rev, roas, type, hidden, live, dailyBudget:f.dailyBudget||0, reqDaily,
+      hasBudget:gross>0, dailyTarget, series, alert, corrected,
+      campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
+  });
+}
+// find a display name from the feed rows when there's no budget/group entry
+function feedName(CH, k){
+  const hit = (CH.feedRows||[]).find(r=>key(r.Label)===k);
+  return hit ? String(hit.Label).trim() : null;
+}
+
+/* ── alerting: month-over-month on Leads & CPL, same elapsed days ─────
+   Compares this month-to-date against the SAME number of days last month, so a
+   partial month never false-alarms. Thresholds live in Settings (CFG). A volume
+   floor (min leads) suppresses tiny/noisy accounts and early-month noise. ── */
+function alertCfg(){
+  return {
+    minLeads:  num(CFG.alertMinLeads, 10),
+    leadsWarn: num(CFG.alertLeadsWarn, 0.25),
+    leadsCrit: num(CFG.alertLeadsCrit, 0.50),
+    cplWarn:   num(CFG.alertCplWarn, 0.30),
+    cplCrit:   num(CFG.alertCplCrit, 0.60),
+  };
+}
+function num(v,d){ const n=Number(v); return isNaN(n)?d:n; }
+
+// inclusive ISO-date range sum over a daily series
+function sumRange(series, start, end){
+  let spend=0,conv=0,clicks=0;
+  for(const d in series){ if(d>=start && d<=end){ const s=series[d]; spend+=s.spend; conv+=s.conv; clicks+=s.clicks; } }
+  return {spend,conv,clicks};
+}
+function rollingWindows(){
+  const days = last_n_days(60);              // oldest→newest
+  return {
+    priorStart: days[0], priorEnd: days[29], // days -60..-31
+    recentStart: days[30], recentEnd: days[59] // last 30 days
+  };
+}
+
+function detectAlert(series, dismissedUntil){
+  if(dismissedUntil){
+    const until = new Date(dismissedUntil);
+    if(!isNaN(until) && until >= new Date(new Date().toDateString())) return null;
+  }
+  const C = alertCfg();
+  const w = rollingWindows();
+  const recent = sumRange(series, w.recentStart, w.recentEnd);
+  const prior  = sumRange(series, w.priorStart,  w.priorEnd);
+  const recLeads = recent.conv, priLeads = prior.conv;
+  const recCPL = recLeads ? recent.spend/recLeads : 0;
+  const priCPL = priLeads ? prior.spend/priLeads : 0;
+
+  // volume floor — need a real prior baseline to judge
+  if(priLeads < C.minLeads) return null;
+
+  const leadDrop  = (priLeads - recLeads) / priLeads;                 // + = fewer leads
+  const spendDrop = prior.spend>0 ? (prior.spend - recent.spend)/prior.spend : 0;
+  const cplRise   = priCPL>0 ? (recCPL - priCPL) / priCPL : 0;        // + = worse efficiency
+
+  // Budget-explained: leads fell but spend fell about as much and CPL held ~steady.
+  // Likely a budget pullback, not a performance problem → light flag only.
+  const budgetLike = leadDrop >= C.leadsWarn && spendDrop >= leadDrop*0.7 && cplRise < C.cplWarn;
+
+  const leadTxt = `leads down ${pctTxt(leadDrop)} vs prior 30d (${fmtLeads(recLeads)} vs ${fmtLeads(priLeads)})`;
+  const cplTxt  = `CPL up ${pctTxt(cplRise)} vs prior 30d (${money(recCPL)} vs ${money(priCPL)})`;
+
+  // efficiency problems (CPL up) are always serious
+  if(recLeads >= C.minLeads && cplRise >= C.cplCrit) return {tier:'crit', metric:'cpl', txt:cplTxt};
+  // lead collapse that ISN'T just budget
+  if(leadDrop >= C.leadsCrit && !budgetLike) return {tier:'crit', metric:'leads', txt:leadTxt};
+  if(recLeads >= C.minLeads && cplRise >= C.cplWarn) return {tier:'warn', metric:'cpl', txt:cplTxt};
+  if(leadDrop >= C.leadsWarn && !budgetLike) return {tier:'warn', metric:'leads', txt:leadTxt};
+  // budget-driven dip — light, informational
+  if(budgetLike) return {tier:'budget', metric:'budget',
+    txt:`leads down ${pctTxt(leadDrop)} but spend down ${pctTxt(spendDrop)} — likely budget`};
+  return null;
+}
+
+function correctionBadge(series, pace){
+  // last 3 days spend vs the daily target implied by recent 7d avg
+  const d = last_n_days(10);
+  const l3 = d.slice(-3).reduce((a,k)=> a+((series[k]&&series[k].spend)||0),0)/3;
+  const prev7 = d.slice(0,7).reduce((a,k)=> a+((series[k]&&series[k].spend)||0),0)/7;
+  if(!prev7) return null;
+  if(pace>1.15 && l3 < prev7*0.85) return {t:'fixed', txt:'↓ corrected'};
+  if(pace<0.85 && l3 > prev7*1.15) return {t:'fixed', txt:'↑ ramped'};
+  return null;
+}
+
+/* ── render ────────────────────────────────────────────────────────── */
+function visible(){
+  let rows = MODEL.slice();
+  if(view==='active') rows = rows.filter(r=> r.live && !r.hidden);
+  else if(view==='problems') rows = rows.filter(r=> !r.hidden && r.alert && (r.alert.tier==='warn'||r.alert.tier==='crit'));
+  // 'all' includes hidden rows so they can be restored
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  if(q) rows = rows.filter(r=> r.name.toLowerCase().includes(q));
+  rows.sort((a,b)=>{
+    const va=sortVal(a), vb=sortVal(b);
+    if(va<vb) return -sortDir; if(va>vb) return sortDir; return 0;
+  });
+  return rows;
+}
+function sortVal(r){
+  switch(sortKey){
+    case 'name': return r.name.toLowerCase();
+    case 'type': return r.type;
+    case 'live': return r.live?0:1;
+    default: return r[sortKey]===Infinity?1e12:(r[sortKey]||0);
+  }
+}
+
+function render(){
+  if(!DATA){ return; }
+  const isLSA = CHANNEL==='lsa';
+  document.getElementById('monthLabel').textContent = isLSA
+    ? `LSA pool · last ${Math.max(1,Number(CFG.lsaMonths)||1)} mo · through ` + ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})
+    : MONTH + ' · through ' + ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})
+      + ' · ' + DAYS_ELAPSED + '/' + DAYS_IN_MONTH + ' days · ' + DAYS_LEFT + ' left';
+  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.toggle('on', b.dataset.ch===CHANNEL));
+  document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===view));
+  document.querySelectorAll('#markupSeg button').forEach(b=>b.classList.toggle('on', (b.dataset.mk==='1')===MARKUP));
+  document.getElementById('hSpend').textContent  = isLSA ? (MARKUP?'Billed to date':'Spent to date') : (MARKUP ? 'MTD Billed' : 'MTD Ad Spend');
+  document.getElementById('hTarget').textContent = isLSA ? (MARKUP?'Approved pool':'Ad Spend Pool') : (MARKUP ? 'Budget' : 'Ad Spend Target');
+  document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
+  renderTotals();
+  renderBudgetBanner();
+  renderAlerts();
+  renderRows();
+}
+
+function renderTotals(){
+  const rows = MODEL.filter(r=> r.live && !r.hidden);
+  const billings = sum(rows,'gross');
+  const feeTot = sum(rows,'fee');
+  // in markup mode the spend-side figures are shown as billed
+  const target = MARKUP ? billings : sum(rows,'adTarget');
+  const spend  = rows.reduce((a,r)=>a+r.spend*gfx(r),0);
+  const fee = feeTot;
+  const expected = target*ELAPSED_FRAC;
+  const pace = expected>0 ? spend/expected : 0;
+  const dailyTarget = target/DAYS_IN_MONTH;
+
+  const projected = rows.reduce((a,r)=>a+r.projected*gfx(r),0);
+  const projRatio = target>0 ? projected/target : 0;
+  const projCls = (projRatio>=0.95 && projRatio<=1.05) ? 'pos' : (projRatio>=0.85 && projRatio<=1.15) ? 'mid' : 'neg';
+  const cls = pace>1.05?'neg':pace<0.9?'mid':'pos';
+  const barColor = pace>1.05?'var(--bad)':pace<0.9?'var(--warn)':'var(--good)';
+  document.getElementById('totals').innerHTML = `
+    <div class="tcell headline">
+      <div class="lab" title="Total spend so far this month vs what should have been spent by now across all active accounts.">${MARKUP?'MTD Billed vs Pace':'MTD Ad Spend vs Pace'}</div>
+      <div class="val ${cls}">${money(spend)}</div>
+      <div class="sub">expected by today ${money(expected)} · ${pct(pace)}</div>
+      <div class="pacebar"><i style="width:${Math.min(pace*100,140)}%;background:${barColor}"></i></div>
+    </div>
+    <div class="tcell"><div class="lab" title="${MARKUP?'Sum of client budgets — what clients pay us this month.':'Sum of all ad spend targets (client budgets minus our fee) — what should reach the platforms this month.'}">${MARKUP?'Total Budget':'Total Ad Spend Target'}</div><div class="val">${money(target)}</div><div class="sub">${money(dailyTarget)}/day across ${rows.length}</div></div>
+    <div class="tcell"><div class="lab" title="Sum of total client budgets — what clients pay us, fee included.">Total Billings</div><div class="val">${money(billings)}</div><div class="sub">what clients pay</div></div>
+    <div class="tcell"><div class="lab" title="Billings minus ad spend target — our gross revenue this month.">Our Fee</div><div class="val">${money(fee)}</div><div class="sub">billings − ad spend</div></div>
+    <div class="tcell"><div class="lab" title="Where the month finishes if every account keeps spending its current daily budget.">Projected Finish</div><div class="val ${projCls}">${money(projected)}</div><div class="sub">${target>0?pct(projected/target)+' of target':'—'}</div></div>
+  `;
+  const gap = spend-expected;
+  document.getElementById('integrityNote').innerHTML =
+    `Summed daily ad-spend target is <b>${money(dailyTarget)}/day</b>; spend through ` +
+    `${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})} is ` +
+    `<b class="${cls}">${money(Math.abs(gap))} ${gap>=0?'ahead of':'behind'}</b> plan. ` +
+    `At current daily budgets the month finishes at <b class="${projCls}">${target>0?pct(projRatio):'—'}</b> of target.`;
+}
+
+let BUDGET_CHANGES = [];
+function renderBudgetBanner(){
+  const el = document.getElementById('budgetBanner');
+  const log = (DATA && DATA.budgetLog) || [];
+  // pending = changed in the last 7 days AND not yet reviewed
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-7);
+  const recent = log.filter(r=>{
+    if(String(r.Ack||'').trim()) return false;              // already reviewed
+    const t = new Date(String(r.Timestamp));
+    return !isNaN(t) && t >= new Date(cutoff.toDateString());
+  }).sort((a,b)=> String(b.Timestamp).localeCompare(String(a.Timestamp)));
+  BUDGET_CHANGES = recent;
+  if(!recent.length){ el.innerHTML=''; return; }
+  el.innerHTML =
+    `<div class="budgetbanner">
+      <div class="bb-h">⚠ Budget changes detected — last 7 days (${recent.length})
+        <span class="grow"></span>
+        <span class="bb-x" title="Mark all as reviewed" onclick="ackAllBudget()">Dismiss all ✕</span>
+      </div>`
+    + recent.slice(0,12).map((r,i)=>{
+        const oldV=Number(r.Old)||0, newV=Number(r.New)||0, d=newV-oldV;
+        const cls = d>=0?'up':'down';
+        return `<div class="bb-row"><span class="d">${esc(String(r.Timestamp))}</span> · <b>${esc(r.Label)}</b>: `
+          + `${money(oldV)} → ${money(newV)} <span class="${cls}">(${d>=0?'+':''}${money(d)})</span> `
+          + `<span class="d">${esc(r.Platform)} · ${esc(r.Month)}${String(r.Source)==='auto'?' · auto':''}</span>`
+          + `<span class="bb-x" title="Mark this one reviewed" onclick="ackBudgetAt(${i})">✕</span></div>`;
+      }).join('')
+    + (recent.length>12?`<div class="bb-row d">…and ${recent.length-12} more in the Budget_Changes tab</div>`:'')
+    + `</div>`;
+}
+
+async function ackBudgetAt(i){
+  const r = BUDGET_CHANGES[i]; if(!r) return;
+  await call({action:'ackBudget', by: LS.name()||'team',
+              label: r.Label, date: String(r.Timestamp).slice(0,10)});
+  load(true);
+}
+async function ackAllBudget(){
+  if(!confirm(`Mark all ${BUDGET_CHANGES.length} budget change${BUDGET_CHANGES.length===1?'':'s'} as reviewed?`)) return;
+  await call({action:'ackBudget', by: LS.name()||'team', all:'1'});
+  load(true);
+}
+
+function renderAlerts(){
+  const rows = visible().filter(r=>r.alert);
+  const order = {crit:0,warn:1,budget:2};
+  rows.sort((a,b)=>order[a.alert.tier]-order[b.alert.tier]);
+  const el = document.getElementById('alerts');
+  if(!rows.length){ el.innerHTML=''; return; }
+  el.innerHTML =
+    `<div class="alert" style="border:0;background:transparent;padding:2px 2px 4px">
+       <div class="txt muted" style="font-size:12px">${rows.length} alert${rows.length===1?'':'s'}</div>
+       <div class="x" title="Snooze all 7 days" onclick="dismissAllAlerts(7)">dismiss all 7d</div>
+       <div class="x" title="Snooze all today" onclick="dismissAllAlerts(1)">today</div>
+     </div>`
+    + rows.map(r=>{
+    const ic = r.alert.tier==='crit'?'🚨':r.alert.tier==='warn'?'⚠️':'📉';
+    return `<div class="alert ${r.alert.tier}">
+      <div class="ic">${ic}</div>
+      <div class="txt"><b>${esc(r.name)}</b> — ${esc(r.alert.txt)} <small>· ${r.type}</small></div>
+      <div class="x" title="Dismiss 7 days" onclick="dismiss('${r.k}',7)">7d</div>
+      <div class="x" title="Dismiss today" onclick="dismiss('${r.k}',1)">today</div>
+    </div>`;
+  }).join('');
+}
+
+function renderRows(){
+  const rows = visible();
+  const tb = document.getElementById('rows');
+  const empty = document.getElementById('emptyState');
+  if(!rows.length){
+    tb.innerHTML=''; empty.style.display='block';
+    empty.textContent = view==='active'
+      ? 'No active accounts. Switch to Show all, or check that campaigns are enabled and the Google script has run.'
+      : view==='problems'
+      ? 'No problem accounts right now — nothing is tripping the Leads or CPL alert thresholds.'
+      : 'No data yet. Once the Google Ads script and Meta sheet report in, franchises appear here.';
+    return;
+  }
+  empty.style.display='none';
+  tb.innerHTML = rows.map(r=>{
+    const paceCls = r.pace>1.05?'neg':r.pace<0.9?'mid':'pos';
+    // green when the current budget lands within 5% of target, amber near, red off
+    const F = gfx(r);
+    const onCls = !r.hasBudget ? 'muted'
+      : (r.onTarget>=0.95 && r.onTarget<=1.05) ? 'pos'
+      : (r.onTarget>=0.85 && r.onTarget<=1.15) ? 'mid' : 'neg';
+    // is the campaign daily budget enough to land on target?
+    const budCls = (!r.hasBudget || !r.dailyBudget || !r.reqDaily) ? ''
+      : (r.dailyBudget < r.reqDaily*0.9 ? 'neg' : r.dailyBudget > r.reqDaily*1.1 ? 'mid' : 'pos');
+    const badge = r.alert
+      ? `<span class="badge b-${r.alert.tier}">${r.alert.tier==='crit'?'crit':r.alert.tier==='warn'?'warn':'budget'}</span>`
+      : (r.corrected?`<span class="badge b-fixed">${r.corrected.txt}</span>`:'');
+    const hidBadge = r.hidden
+      ? `<span class="badge b-fixed" style="cursor:pointer" title="Click to restore this account" onclick="setHidden('${r.k}',false)">hidden ↩</span>` : '';
+    return `<tr${r.hidden?' style="opacity:.55"':''}>
+      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${badge}${hidBadge}</div></td>
+      <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
+      <td>${r.live?'<span class="pos">active</span>':'<span class="muted">paused</span>'}</td>
+      <td>${money(r.spend*F)}</td>
+      <td class="muted">${r.hasBudget?money(r.projected*F):'—'}</td>
+      <td class="budcell" onclick="editBudget('${r.k}')">${r.hasBudget?money(r.adTarget*F):'<span class=muted>set</span>'}</td>
+      <td class="${budCls}">${r.dailyBudget?money(r.dailyBudget*F):'<span class="muted">—</span>'}</td>
+      <td class="muted">${r.hasBudget?money(r.reqDaily*F):'—'}</td>
+      <td class="pace ${paceCls}">${r.hasBudget?pct(r.pace):'—'}</td>
+      <td class="${onCls}" title="${r.hasBudget?`projected ${money(r.projected*F)} vs target ${money(r.adTarget*F)} (${r.delta>=0?'+':''}${money(r.delta*F)})`:''}">${r.hasBudget?pct(r.onTarget):'—'}</td>
+      <td>${r.conv?fmtLeads(r.conv):'—'}</td>
+      <td>${r.cpa?money(r.cpa*F):'—'}</td>
+      <td><span class="flag" title="Email flag" onclick="openFlag('${r.k}')">⚑</span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* ── actions ───────────────────────────────────────────────────────── */
+async function editBudget(k){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  const platform = CHANNEL==='lsa' ? 'LSA' : CHANNEL==='meta' ? 'Meta' : 'Google';
+  const month = CHANNEL==='lsa' ? 'pool' : MONTH;
+  const label = CHANNEL==='lsa' ? 'approved pool' : `${month} budget`;
+  const v = prompt(`Manual override — total (billed) ${platform} ${label} for ${r.name}. Ad-spend target is computed after the fee. This will be overwritten on the next sync.`, r.gross?String(Math.round(r.gross)):'');
+  if(v===null) return;
+  const amount = Number(v);
+  if(isNaN(amount)) return alert('Enter a number.');
+  await call({action:'setBudget', label:r.name, platform, month, amount});
+  load(true);
+}
+async function toggleType(k){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  const next = r.type==='e-comm'?'lead-gen':'e-comm';
+  await call({action:'setType', label:r.name, value:next});
+  load();
+}
+async function setHidden(k, hide){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  if(hide && !confirm(`Remove "${r.name}" from the tool?\n\nIt stays in Google Ads — this only hides it here. You can restore it from the "Show all" view.`)) return;
+  await call({action:'setHidden', label:r.name, value: hide?'TRUE':''});
+  closeDD();
+  load(true);
+}
+async function dismiss(k, days){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  r.alert = null;                       // clear immediately in the UI
+  renderAlerts(); renderRows();
+  const until = new Date(); until.setDate(until.getDate()+days);
+  try{ await call({action:'setDismiss', label:r.name, until: isoLocal(until)}); }
+  catch(e){ /* stays dismissed locally until next full reload */ }
+}
+async function dismissAllAlerts(days){
+  const hit = MODEL.filter(r=>r.alert && !r.hidden &&
+    (view!=='problems' || r.alert.tier==='warn' || r.alert.tier==='crit'));
+  if(!hit.length) return;
+  hit.forEach(r=> r.alert=null);        // clear all immediately
+  renderAlerts(); renderRows();
+  const until = new Date(); until.setDate(until.getDate()+days);
+  const iso = isoLocal(until);
+  for(const r of hit){ try{ await call({action:'setDismiss', label:r.name, until:iso}); }catch(e){} }
+}
+/* ── flag → email ──────────────────────────────────────────────────────── */
+let FLAG_K = null;
+function paceWord(p){ return p>1.05 ? 'over' : p<0.95 ? 'under' : 'on pace'; }
+
+function openFlag(k){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  FLAG_K = k;
+  const to = (CFG.emailTo||'').split(',').map(s=>s.trim()).filter(Boolean);
+  document.getElementById('flagWho').textContent =
+    `${r.name} · sending to ${to.length ? to.join(', ') : 'nobody — set recipients in Settings'}`;
+  const nCamps = Object.keys(r.campaigns||{}).length;
+  document.getElementById('flagIncludes').textContent =
+    `The email includes the pacing summary, month-to-date leads and CPL, a weekly trend table` +
+    (nCamps>1 ? `, and a split across ${nCamps} campaigns.` : '.');
+  document.getElementById('flagNote').value = '';
+  document.getElementById('flagMsg').textContent = '';
+  document.getElementById('flagSend').disabled = false;
+  document.getElementById('flagScrim').classList.add('on');
+  setTimeout(()=>document.getElementById('flagNote').focus(), 60);
+}
+function closeFlag(){ document.getElementById('flagScrim').classList.remove('on'); }
+
+async function sendFlag(){
+  const r = MODEL.find(x=>x.k===FLAG_K); if(!r) return;
+  const msg = document.getElementById('flagMsg');
+  const btn = document.getElementById('flagSend');
+  btn.disabled = true; msg.textContent = 'sending…';
+
+  const pw = paceWord(r.pace);
+  const me = LS.name();
+  const F = gfx(r);
+  const cvr = (c,k)=> k? (c/k*100).toFixed(1)+'%' : '—';
+
+  // last 6 weeks
+  const weeks = bucketize(r.series, 42, 'week').slice(-6).map(b=>[
+    b.label, money(b.spend*F), fmt(b.clicks), cvr(b.conv,b.clicks), fmtLeads(b.conv), b.conv?money(b.spend*F/b.conv):'—'
+  ]);
+  // campaign split, last 30 days
+  const days = last_n_days(30);
+  const camps = Object.keys(r.campaigns||{}).map(name=>{
+    let spend=0,conv=0,clicks=0; const s=r.campaigns[name];
+    days.forEach(d=>{ if(s[d]){ spend+=s[d].spend; conv+=s[d].conv; clicks+=s[d].clicks; } });
+    return {name,spend,conv,clicks};
+  }).sort((a,b)=>b.spend-a.spend)
+    .map(c=>[c.name, money(c.spend*F), fmt(c.clicks), cvr(c.conv,c.clicks), fmtLeads(c.conv), c.conv?money(c.spend*F/c.conv):'—']);
+
+  const payload = {
+    label:r.name, month:MONTH, status:r.live?'active':'paused', type:r.type,
+    note:document.getElementById('flagNote').value.trim(),
+    pace:pct(r.pace), paceWord:pw,
+    basis: MARKUP ? 'Figures include our markup (what the client is billed).'
+                  : 'Figures are ad spend only (excludes our fee).',
+    spend:money(r.spend*F), expected:money(r.adTarget*ELAPSED_FRAC*F),
+    target:money(r.adTarget*F), forecast:money(r.projected*F),
+    delta:(r.delta>=0?'+':'')+money(r.delta*F),
+    dailyBudget:r.dailyBudget?money(r.dailyBudget*F):'—',
+    reqDaily:r.hasBudget?money(r.reqDaily*F):'—',
+    billings:money(r.gross), fee:money(r.fee),
+    leads:fmtLeads(r.conv), cpl:r.cpa?money(r.cpa*F):'—',
+    alert:r.alert?r.alert.txt:'', alertTier:r.alert?r.alert.tier.toUpperCase():'',
+    weeks, camps: camps.length>1?camps:[],
+    sender: me ? `Flagged by ${me} from the pacing dashboard.` : 'Sent from the pacing dashboard.'
+  };
+
+  const subject = `Pacing flag: ${r.name} — ${pct(r.pace)} (${pw})`;
+  try{
+    const res = await call({action:'sendEmail', subject, payload:JSON.stringify(payload)});
+    if(res && res.ok){ msg.textContent = `sent to ${res.to}`; setTimeout(closeFlag, 1200); }
+    else { msg.textContent = 'failed: '+((res&&res.error)||'?'); btn.disabled=false; }
+  }catch(e){ msg.textContent = 'failed: '+e; btn.disabled=false; }
+}
+
+/* ── deep dive ─────────────────────────────────────────────────────── */
+let DD = { k:null, metric:'cost', period:90, gran:'week' };
+const METRICS = {
+  cost:   { label:'Cost',   fmt:v=>money(v),               agg:(b,F)=> b.spend*F,                    target:true  },
+  clicks: { label:'Clicks', fmt:v=>fmt(v),                 agg:(b,F)=> b.clicks,                     target:false },
+  cvr:    { label:'CVR',    fmt:v=>(v*100).toFixed(1)+'%', agg:(b,F)=> b.clicks? b.conv/b.clicks:0,  target:false },
+  leads:  { label:'Leads',  fmt:v=>fmtLeads(v),            agg:(b,F)=> b.conv,                       target:false },
+  cpl:    { label:'CPL',    fmt:v=>money(v),               agg:(b,F)=> b.conv? b.spend*F/b.conv:0,   target:false },
+};
+
+function openDD(k){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  DD.k = k;
+  document.getElementById('ddBody').innerHTML = `
+    <button class="close ghost" onclick="closeDD()">Close</button>
+    <h2>${esc(r.name)}</h2>
+    <div class="muted">${r.type} · ${r.live?'active':'paused'}</div>
+    <div class="kv">
+      <div class="c"><div class="l">${MARKUP?'MTD Billed':'MTD Ad Spend'}</div><div class="v">${money(r.spend*gfx(r))}</div></div>
+      <div class="c"><div class="l">${MARKUP?'Budget':'Ad Spend Target'}</div><div class="v">${money(r.adTarget*gfx(r))}</div></div>
+      <div class="c"><div class="l">Daily Target</div><div class="v">${money(r.dailyTarget*gfx(r))}</div></div>
+      <div class="c"><div class="l">Pace</div><div class="v ${r.pace>1.05?'neg':r.pace<0.9?'mid':'pos'}">${pct(r.pace)}</div></div>
+    </div>
+    <div class="ddctrls">
+      <div class="seg" id="ddMetric"></div>
+      <div class="grow"></div>
+      <div class="seg" id="ddPeriod"></div>
+      <div class="seg" id="ddGran"></div>
+    </div>
+    <canvas id="ddCanvas" width="760" height="240"></canvas>
+    <div id="ddTable"></div>
+    <div id="ddSplit"></div>
+    <div class="settings-row" style="margin-top:14px"><label></label>
+      <button onclick="openFlag('${r.k}')">Email flag</button>
+      <button class="ghost" onclick="setHidden('${r.k}',${r.hidden?'false':'true'})">${r.hidden?'Restore to tool':'Remove from tool'}</button>
+      <button class="ghost" onclick="closeDD()">Close</button>
+    </div>`;
+  document.getElementById('ddMetric').innerHTML = Object.keys(METRICS)
+    .map(m=>`<button data-m="${m}" onclick="ddSet('metric','${m}')">${METRICS[m].label}</button>`).join('');
+  document.getElementById('ddPeriod').innerHTML = [30,60,90]
+    .map(p=>`<button data-p="${p}" onclick="ddSet('period',${p})">${p}d</button>`).join('');
+  document.getElementById('ddGran').innerHTML = [['day','Day'],['week','Week'],['month','Month']]
+    .map(g=>`<button data-g="${g[0]}" onclick="ddSet('gran','${g[0]}')">${g[1]}</button>`).join('');
+  document.getElementById('ddScrim').classList.add('on');
+  renderDD();
+  ensureCampaigns(r);
+}
+
+// Pull every account's campaign split once, in the background, so clicking a row
+// renders instantly instead of waiting on a per-account fetch.
+let PREFETCHED = false;
+async function prefetchCampaigns(){
+  if(PREFETCHED) return;
+  try{
+    const res = await call({action:'campaignBulk'});
+    if(!res || !res.ok || !res.rows) return;
+    const L = res.labels||[], C = res.camps||[];
+    const byLabel = {};
+    res.rows.forEach(row=>{
+      const [d, li, ci, spend, conv, clicks, rev] = row;
+      const l = key(L[li]||''); const c = C[ci]||'—';
+      if(!l) return;
+      (byLabel[l] = byLabel[l] || {});
+      (byLabel[l][c] = byLabel[l][c] || {});
+      const o = (byLabel[l][c][d] = byLabel[l][c][d] || {spend:0,conv:0,rev:0,clicks:0});
+      o.spend+=spend||0; o.conv+=conv||0; o.clicks+=clicks||0; o.rev+=rev||0;
+    });
+    MODEL.forEach(r=>{
+      const src = byLabel[r.k];
+      if(src){
+        for(const c in src){
+          r.campaigns[c] = r.campaigns[c] || {};
+          for(const d in src[c]){
+            const dst = (r.campaigns[c][d] = r.campaigns[c][d] || {spend:0,conv:0,rev:0,clicks:0});
+            dst.spend+=src[c][d].spend; dst.conv+=src[c][d].conv;
+            dst.clicks+=src[c][d].clicks; dst.rev+=src[c][d].rev;
+          }
+        }
+      }
+      r.gLoaded = true;   // no per-account fetch needed anymore
+    });
+    PREFETCHED = true;
+    if(DD.k){ const r = MODEL.find(x=>x.k===DD.k); if(r) renderSplit(r); }
+  }catch(e){ /* deep-dives fall back to per-account loading */ }
+}
+
+// fetch this franchise's Google campaign daily on demand, merge, re-render split
+async function ensureCampaigns(r){
+  if(r.gLoaded) return;
+  try{
+    const res = await call({action:'campaignDaily', label:r.name});
+    if(res && res.ok){
+      (res.rows||[]).forEach(row=>{
+        const c=String(row.Campaign||'—').trim()||'—';
+        const d=String(row.Date).slice(0,10); if(!d) return;
+        r.campaigns[c]=r.campaigns[c]||{};
+        r.campaigns[c][d]=r.campaigns[c][d]||{spend:0,conv:0,rev:0,clicks:0};
+        const o=r.campaigns[c][d];
+        o.spend+=Number(row.Spend)||0; o.conv+=Number(row.Conv)||0; o.rev+=Number(row.Revenue)||0; o.clicks+=Number(row.Clicks)||0;
+      });
+    }
+  }catch(e){ /* leave split empty */ }
+  r.gLoaded=true;
+  if(DD.k===r.k) renderSplit(r);
+}
+function closeDD(){ document.getElementById('ddScrim').classList.remove('on'); }
+function ddSet(field, value){ DD[field]=value; renderDD(); }
+
+function renderDD(){
+  const r = MODEL.find(x=>x.k===DD.k); if(!r) return;
+  document.querySelectorAll('#ddMetric button').forEach(b=>b.classList.toggle('on', b.dataset.m===DD.metric));
+  document.querySelectorAll('#ddPeriod button').forEach(b=>b.classList.toggle('on', +b.dataset.p===DD.period));
+  document.querySelectorAll('#ddGran button').forEach(b=>b.classList.toggle('on', b.dataset.g===DD.gran));
+
+  const buckets = bucketize(r.series, DD.period, DD.gran);
+  drawMetricChart(buckets, DD.metric, r);
+
+  const M = METRICS[DD.metric];
+  const F = gfx(r);
+  const sumSpend=buckets.reduce((a,b)=>a+b.spend,0)*F;
+  const sumConv =buckets.reduce((a,b)=>a+b.conv,0);
+  const sumClick=buckets.reduce((a,b)=>a+b.clicks,0);
+  const totalVal = DD.metric==='cost'?sumSpend : DD.metric==='clicks'?sumClick : DD.metric==='leads'?sumConv
+    : DD.metric==='cvr'?(sumClick?sumConv/sumClick:0) : (sumConv?sumSpend/sumConv:0);
+  const basis = MARKUP ? ' · with markup' : '';
+  const tRows = DD.gran==='day' ? buckets.slice().reverse() : buckets;   // newest first by day
+  document.getElementById('ddTable').innerHTML =
+    `<table class="ddtbl"><thead><tr><th>${DD.gran==='day'?'Day':DD.gran==='week'?'Week of':'Month'}</th><th>${M.label}${basis}</th></tr></thead><tbody>`
+    + tRows.map(b=>`<tr><td>${b.label}</td><td>${M.fmt(M.agg(b,F))}</td></tr>`).join('')
+    + `</tbody><tfoot><tr><td>${DD.period}-day total</td><td>${M.fmt(totalVal)}</td></tr></tfoot></table>`;
+
+  renderSplit(r);
+}
+
+// per-campaign breakdown for the selected window (only when >1 campaign)
+function renderSplit(r){
+  const el = document.getElementById('ddSplit');
+  const camps = r.campaigns || {};
+  const names = Object.keys(camps);
+  if(!r.gLoaded && names.length < 2){
+    el.innerHTML = '<div class="muted" style="font-size:12px;margin-top:18px">Loading campaign split…</div>';
+    return;
+  }
+  if(names.length < 2){ el.innerHTML=''; return; }
+  const days = last_n_days(DD.period);
+  const rows = names.map(name=>{
+    let spend=0,conv=0,clicks=0;
+    const s = camps[name];
+    days.forEach(d=>{ if(s[d]){ spend+=s[d].spend; conv+=s[d].conv; clicks+=s[d].clicks; } });
+    return {name, spend, conv, clicks, cvr:clicks?conv/clicks:0, cpl:conv?spend/conv:0};
+  }).sort((a,b)=>b.spend-a.spend);
+  const F = gfx(r);
+  el.innerHTML =
+    `<div class="muted" style="font-size:12px;margin-top:18px">Campaign split · last ${DD.period} days${MARKUP?' · with markup':''}</div>`
+    + `<table class="ddtbl"><thead><tr><th>Campaign</th><th>Cost</th><th>Clicks</th><th>CVR</th><th>Leads</th><th>CPL</th></tr></thead><tbody>`
+    + rows.map(c=>`<tr><td>${esc(c.name)}</td><td>${money(c.spend*F)}</td><td>${fmt(c.clicks)}</td><td>${(c.cvr*100).toFixed(1)}%</td><td>${fmtLeads(c.conv)}</td><td>${c.conv?money(c.cpl*F):'—'}</td></tr>`).join('')
+    + `</tbody></table>`;
+}
+
+function bucketize(series, period, gran){
+  const asof = isoLocal(ASOF);
+  const days = last_n_days(period).filter(d=> d <= asof);   // complete days only
+  const map = new Map();
+  days.forEach(d=>{
+    let bkey, blabel;
+    if(gran==='month'){ bkey=d.slice(0,7); blabel=monthLabel(bkey); }
+    else if(gran==='day'){ bkey=d; blabel=dayLabel(d); }
+    else { bkey=weekStart(d); blabel=weekLabel(bkey); }
+    if(!map.has(bkey)) map.set(bkey,{label:blabel,spend:0,conv:0,clicks:0});
+    const s = series[d];
+    if(s){ const b=map.get(bkey); b.spend+=s.spend; b.conv+=s.conv; b.clicks+=s.clicks; }
+  });
+  return [...map.values()];
+}
+
+function drawMetricChart(buckets, mkey, r){
+  const cv=document.getElementById('ddCanvas'); if(!cv) return;
+  const ctx=cv.getContext('2d'); const W=cv.width,H=cv.height,padL=8,padT=14,padB=26;
+  ctx.clearRect(0,0,W,H);
+  const M=METRICS[mkey];
+  const F=gfx(r);
+  const vals=buckets.map(b=>M.agg(b,F));
+  let target=null;
+  if(M.target) target = (DD.gran==='day' ? r.dailyTarget
+                      : DD.gran==='week' ? r.dailyTarget*7
+                      : r.adTarget) * F;
+  const maxV=Math.max(...vals, target||0, 1)*1.18;
+  const n=Math.max(vals.length,1);
+  const plotW=W-padL-12, plotH=H-padT-padB, base=padT+plotH;
+  const step=plotW/n, bw=Math.min(46, step*0.62);
+  const x=i=> padL + step*i + step/2;
+  const y=v=> base - (v/maxV)*plotH;
+
+  if(target!=null){
+    ctx.strokeStyle='#c2c1cc'; ctx.setLineDash([5,4]); ctx.beginPath();
+    ctx.moveTo(padL, y(target)); ctx.lineTo(W-12, y(target)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='#6c6b78'; ctx.font='11px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('target '+M.fmt(target), padL+2, Math.max(y(target)-4,11));
+  }
+  const showVals  = n <= 14;                    // per-bar numbers only when they fit
+  const labelEvery = Math.ceil(n/12);            // ~12 x-axis labels max
+  buckets.forEach((b,i)=>{
+    const v=vals[i], bx=x(i)-bw/2, by=y(v);
+    ctx.fillStyle='#f26722'; ctx.fillRect(bx, by, Math.max(bw,1), Math.max(base-by,0));
+    ctx.textAlign='center';
+    if(showVals){ ctx.fillStyle='#2b2a35'; ctx.font='10px sans-serif'; ctx.fillText(M.fmt(v), x(i), by-4); }
+    if(i % labelEvery === 0 || i === n-1){
+      ctx.fillStyle='#6c6b78'; ctx.font='10px sans-serif'; ctx.fillText(b.label, x(i), H-9);
+    }
+  });
+  ctx.textAlign='left';
+}
+
+function weekStart(d){ const dt=new Date(d+'T00:00:00'); const off=(dt.getDay()+6)%7; dt.setDate(dt.getDate()-off); return isoLocal(dt); }
+function dayLabel(d){ return new Date(d+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+function weekLabel(mon){ return new Date(mon+'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}); }
+function monthLabel(ym){ return new Date(ym+'-01T00:00:00').toLocaleDateString(undefined,{month:'short',year:'2-digit'}); }
+
+/* ── settings ──────────────────────────────────────────────────────── */
+function openSettings(){
+  document.getElementById('setGFee').value = ((CFG.googleFee||0)*100);
+  document.getElementById('setMFee').value = ((CFG.metaFee||0)*100);
+  document.getElementById('setLFee').value = ((CFG.lsaFee||0)*100);
+  document.getElementById('setBudUrl').value = CFG.budgetSheetUrl||'';
+  const C = alertCfg();
+  document.getElementById('setMinLeads').value  = C.minLeads;
+  document.getElementById('setLeadsWarn').value = Math.round(C.leadsWarn*100);
+  document.getElementById('setLeadsCrit').value = Math.round(C.leadsCrit*100);
+  document.getElementById('setCplWarn').value   = Math.round(C.cplWarn*100);
+  document.getElementById('setCplCrit').value   = Math.round(C.cplCrit*100);
+  document.getElementById('setEmailTo').value = CFG.emailTo||'';
+  // restore the saved budget mapping so it's visible without re-loading tabs
+  const sel = document.getElementById('setBudTab');
+  if(CFG.budgetTab){
+    if(!Array.from(sel.options).some(o=>o.value===CFG.budgetTab))
+      sel.insertAdjacentHTML('beforeend', `<option value="${esc(CFG.budgetTab)}">${esc(CFG.budgetTab)}</option>`);
+    sel.value = CFG.budgetTab;
+    document.getElementById('tabPick').style.display = 'flex';
+    document.getElementById('budgetMap').style.display = 'block';
+    document.getElementById('tabMsg').textContent = 'saved — Load tabs to change';
+  }
+  if(CFG.budgetLabelCol!==undefined && CFG.budgetLabelCol!=='')
+    document.getElementById('setLabelColL').value = indexToColLetter(CFG.budgetLabelCol);
+  if(CFG.budgetAmountCol!==undefined && CFG.budgetAmountCol!=='')
+    document.getElementById('setBudgetColL').value = indexToColLetter(CFG.budgetAmountCol);
+  if(CFG.budgetPlatform) document.getElementById('setBudPlat').value = CFG.budgetPlatform;
+  document.getElementById('syncMsg').textContent =
+    CFG.lastBudgetSync ? `last auto-sync ${CFG.lastBudgetSync}` : 'no auto-sync yet';
+  document.getElementById('setName').value = LS.name();
+  document.getElementById('setUrl').value = localStorage.getItem('pace_url')||'';
+  document.getElementById('setSecret').value = localStorage.getItem('pace_secret')||'';
+  document.getElementById('setScrim').classList.add('on');
+}
+function closeSettings(){ document.getElementById('setScrim').classList.remove('on'); }
+async function saveSettings(){
+  // personal
+  const name=val('setName'), url=val('setUrl'), secret=val('setSecret');
+  name?localStorage.setItem('pace_name',name):localStorage.removeItem('pace_name');
+  url?localStorage.setItem('pace_url',url):localStorage.removeItem('pace_url');
+  secret?localStorage.setItem('pace_secret',secret):localStorage.removeItem('pace_secret');
+  // shared (to sheet) — ONE batched request so a partial save can't happen
+  const pairs = {
+    googleFee: Number(val('setGFee'))/100,
+    metaFee:   Number(val('setMFee'))/100,
+    lsaFee:    Number(val('setLFee'))/100,
+    budgetSheetUrl: val('setBudUrl'),
+    alertMinLeads:  Number(val('setMinLeads')),
+    alertLeadsWarn: Number(val('setLeadsWarn'))/100,
+    alertLeadsCrit: Number(val('setLeadsCrit'))/100,
+    alertCplWarn:   Number(val('setCplWarn'))/100,
+    alertCplCrit:   Number(val('setCplCrit'))/100,
+    emailTo:        val('setEmailTo')
+  };
+  const res = await call({action:'setConfigBatch', pairs: JSON.stringify(pairs)});
+  if(!res || !res.ok){ alert('Settings failed to save: '+((res&&res.error)||'?')); return; }
+  CFG = Object.assign(CFG, pairs);
+  closeSettings();
+  load(true);
+}
+
+async function loadBudgetTabs(){
+  const url = val('setBudUrl');
+  const msg = document.getElementById('tabMsg');
+  msg.textContent = 'loading…';
+  if(url) await call({action:'setConfig', key:'budgetSheetUrl', value:url});
+  const res = await call({action:'budgetTabs', url});
+  if(!res || !res.ok){ msg.textContent = 'failed: '+((res&&res.error)||'?'); return; }
+  msg.textContent = `${res.tabs.length} tab${res.tabs.length===1?'':'s'} found`;
+  const sel = document.getElementById('setBudTab');
+  sel.innerHTML = res.tabs.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
+  if(CFG.budgetTab && res.tabs.includes(CFG.budgetTab)) sel.value = CFG.budgetTab;
+  document.getElementById('tabPick').style.display = 'flex';
+  loadBudgetColumns();
+}
+let BUDCOLS = { columns:[], sample:[] };
+function colLetterToIndex(s){
+  s = String(s||'').trim().toUpperCase();
+  if(!/^[A-Z]+$/.test(s)) return -1;
+  let n=0; for(const ch of s) n = n*26 + (ch.charCodeAt(0)-64);
+  return n-1; // 0-based
+}
+function indexToColLetter(i){
+  let n=Number(i)+1, s=''; if(isNaN(n)||n<1) return '';
+  while(n>0){ const r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
+  return s;
+}
+function previewCol(kind, inputId, infoId){
+  const info = document.getElementById(infoId);
+  const raw = document.getElementById(inputId).value;
+  if(!raw){ info.textContent=''; return; }
+  if(!BUDCOLS.columns.length){ info.textContent=''; return; }
+  // LSA accepts a comma list; preview the first column and count
+  const parts = String(raw).split(',').map(s=>s.trim()).filter(Boolean);
+  const idxs = parts.map(colLetterToIndex);
+  if(idxs.some(i=>i<0)){ info.textContent='⚠ invalid letter'; return; }
+  if(idxs.some(i=>i>=BUDCOLS.columns.length)){ info.textContent='⚠ past last column'; return; }
+  const i = idxs[0];
+  const head = BUDCOLS.columns[i], first=(BUDCOLS.sample[0]||[])[i];
+  info.textContent = (idxs.length>1?`${idxs.length} cols · `:'') + `“${head||'(blank)'}” = “${first!=null?first:'(blank)'}”`;
+}
+
+async function loadBudgetColumns(){
+  const url = val('setBudUrl');
+  const tab = document.getElementById('setBudTab').value;
+  const msg = document.getElementById('colMsg');
+  msg.textContent = 'loading…';
+  const res = await call({action:'budgetColumns', url, tab});
+  if(!res || !res.ok){ msg.textContent = 'failed: '+((res&&res.error)||'?'); document.getElementById('budgetMap').style.display='none'; return; }
+  BUDCOLS = { columns:res.columns||[], sample:res.sample||[] };
+  msg.textContent = `${BUDCOLS.columns.length} columns (A–${indexToColLetter(BUDCOLS.columns.length-1)})`;
+  const setL = (id,spec)=>{ if(spec!==undefined && spec!==''){
+    document.getElementById(id).value = String(spec).split(',').map(x=>indexToColLetter(Number(x.trim()))).join(','); } };
+  setL('setLabelColL', CFG.budgetLabelCol);
+  setL('setGoogleColL', CFG.budgetGoogleCol);
+  setL('setLsaColL', CFG.budgetLSACol);
+  setL('setMetaColL', CFG.budgetMetaCol);
+  previewCol('label','setLabelColL','labelColInfo');
+  previewCol('g','setGoogleColL','gColInfo');
+  previewCol('lsa','setLsaColL','lColInfo');
+  previewCol('m','setMetaColL','mColInfo');
+  document.getElementById('budgetMap').style.display = 'block';
+}
+
+const CH_COL = { google:'setGoogleColL', lsa:'setLsaColL', meta:'setMetaColL' };
+async function syncChannel(ch){
+  const msg = document.getElementById('syncMsg');
+  const li = colLetterToIndex(document.getElementById('setLabelColL').value);
+  if(li<0){ msg.textContent='enter the account column (e.g. A)'; return; }
+  const parts = document.getElementById(CH_COL[ch]).value.split(',').map(s=>s.trim()).filter(Boolean);
+  const idxs = parts.map(colLetterToIndex);
+  if(!idxs.length || idxs.some(i=>i<0)){ msg.textContent=`enter valid ${ch.toUpperCase()} column letter(s)`; return; }
+  msg.textContent = `syncing ${ch}…`;
+  const res = await call({ action:'syncBudgets', url:val('setBudUrl'),
+    tab:document.getElementById('setBudTab').value,
+    channel:ch, labelCol:li, budgetCol:idxs.join(',') });
+  msg.textContent = res && res.ok
+    ? `${ch}: synced ${res.synced}${res.changed?` · ${res.changed} changed`:''}`
+    : (`${ch} failed: `+((res&&res.error)||'?'));
+  if(res && res.ok){ load(true); }
+}
+async function syncAllChannels(){
+  for(const ch of ['google','lsa','meta']){
+    if(document.getElementById(CH_COL[ch]).value.trim()) await syncChannel(ch);
+  }
+}
+
+/* ── util ──────────────────────────────────────────────────────────── */
+function setView(v){ view=v; localStorage.setItem('pace_view',v); render(); }
+function sortBy(k){ if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir=(k==='name'||k==='type'||k==='live')?1:-1;} localStorage.setItem('pace_sort',k); render(); }
+function groupBy(arr,fn){ const o={}; arr.forEach(x=>{ const k=fn(x); (o[k]=o[k]||[]).push(x); }); return o; }
+function sum(a,f){ return a.reduce((s,r)=>s+(r[f]||0),0); }
+function money(n){ if(n===Infinity)return '∞'; const neg=n<0; n=Math.abs(n);
+  const s = n>=1000? '$'+(n/1000).toFixed(n>=10000?0:1)+'k' : '$'+n.toFixed(0); return neg?'-'+s:s; }
+function fmt(n){ return Number(n).toLocaleString(undefined,{maximumFractionDigits:1}); }
+function fmtLeads(n){ return Math.round(Number(n)||0).toLocaleString(); }
+function pct(n){ return n===Infinity?'∞':Math.round(n*100)+'%'; }
+function pctTxt(p){ return Math.round(Math.abs(p)*100)+'%'; }
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function val(id){ return document.getElementById(id).value.trim(); }
+function titleize(k){ return k.replace(/\b\w/g,c=>c.toUpperCase()); }
+function isoLocal(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// ends YESTERDAY — today is incomplete and is excluded everywhere
+function last_n_days(n){ const out=[]; const d=new Date(); d.setDate(d.getDate()-1);
+  for(let i=n-1;i>=0;i--){ const x=new Date(d); x.setDate(d.getDate()-i); out.push(isoLocal(x)); } return out; }
+function trend(series,n){ const days=last_n_days(n); let spend=0,conv=0; days.forEach(k=>{ if(series[k]){spend+=series[k].spend;conv+=series[k].conv;} }); return {spend,conv}; }
+
+document.querySelector('.brand').innerHTML =
+  'Content<span>Massive</span> <em style="font-style:normal;color:var(--muted);font-weight:500;font-size:14px">Pacing</em>';
+load();
+</script>
+</body>
+</html>
