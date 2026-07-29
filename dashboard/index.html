@@ -351,19 +351,34 @@ function showExec(){
   if(DATA) renderExec();
 }
 
-function execData(){
-  const CHS = [
-    {key:'google', label:'Google Ads',        fee:Number(CFG.googleFee)||0, platform:'Google', month:MONTH,  daily:DATA.dailyG||[]},
-    {key:'lsa',    label:'Local Service Ads',  fee:Number(CFG.lsaFee)||0,    platform:'LSA',    month:'pool', daily:DATA.dailyLsa||[]},
-    {key:'meta',   label:'Facebook',           fee:Number(CFG.metaFee)||0,   platform:'Meta',   month:MONTH,  daily:DATA.metaDaily||[]}
-  ];
+let EXEC_MONTH = null;   // null → current month
+function execMonthList(){
+  const y = now.getFullYear(), out = [];
+  for(let m = now.getMonth(); m >= 0; m--) out.push(y + '-' + String(m+1).padStart(2,'0'));
+  return out;   // current month first, back to January
+}
+function lastDayIso(ym){ const p = ym.split('-'); return isoLocal(new Date(+p[0], +p[1], 0)); }
+function setExecMonth(m){ EXEC_MONTH = m; renderExec(); }
+
+function execData(targetMonth){
+  targetMonth = targetMonth || MONTH;
+  const isCurrent = targetMonth === MONTH;
+  const elapsedFrac = isCurrent ? ELAPSED_FRAC : 1;            // past months are complete → projection = actual
   const asof = isoLocal(ASOF), yr = String(now.getFullYear());
-  const monthly = {};   // 'YYYY-MM' -> {google,lsa,meta}
+  const ytdEnd = isCurrent ? asof : lastDayIso(targetMonth);   // YTD cumulative through the selected month
+  // LSA is treated as a plain calendar month here (this month's billed vs this month's
+  // spend) — NOT the running burn-down pool, and leftover is never carried in.
+  const CHS = [
+    {key:'google', label:'Google Ads',       fee:Number(CFG.googleFee)||0, platform:'Google', daily:DATA.dailyG||[]},
+    {key:'lsa',    label:'Local Service Ads', fee:Number(CFG.lsaFee)||0,    platform:'LSA',    daily:DATA.dailyLsa||[]},
+    {key:'meta',   label:'Facebook',          fee:Number(CFG.metaFee)||0,   platform:'Meta',   daily:DATA.metaDaily||[]}
+  ];
+  const monthly = {};   // 'YYYY-MM' -> {google,lsa,meta}  (whole-year trend for the chart)
   const channels = CHS.map(ch=>{
     const billed = {};
     (DATA.budgets||[]).forEach(r=>{
       if(key(r.Platform)!==key(ch.platform)) return;
-      if(String(r.Month).trim()!==ch.month) return;
+      if(String(r.Month).trim()!==targetMonth) return;         // this month's billed (LSA now writes a monthly row)
       const b = brandOf(r.Label);
       billed[b] = (billed[b]||0) + (Number(r['Total Budget'])||0);
     });
@@ -372,16 +387,16 @@ function execData(){
       const d = String(r.Date).slice(0,10); if(!d || d>asof) return;
       const b = brandOf(r.Label), sp = Number(r.Spend)||0;
       if(d.slice(0,4)===yr){
-        spendY[b]=(spendY[b]||0)+sp;
-        const mk=d.slice(0,7); (monthly[mk]=monthly[mk]||{google:0,lsa:0,meta:0})[ch.key]+=sp;
+        const mk=d.slice(0,7); (monthly[mk]=monthly[mk]||{google:0,lsa:0,meta:0})[ch.key]+=sp;   // chart: whole year
+        if(d<=ytdEnd) spendY[b]=(spendY[b]||0)+sp;                                                // YTD through selected month
       }
-      if(d.slice(0,7)===MONTH) spendM[b]=(spendM[b]||0)+sp;
+      if(d.slice(0,7)===targetMonth) spendM[b]=(spendM[b]||0)+sp;                                 // selected month only
     });
     const fee1 = 1-ch.fee;
     const names = new Set([...Object.keys(billed), ...Object.keys(spendM), ...Object.keys(spendY)]);
     const accounts = [...names].map(b=>{
       const bill=billed[b]||0, target=bill*fee1, sm=spendM[b]||0, sy=spendY[b]||0;
-      const projected = ELAPSED_FRAC>0 ? sm/ELAPSED_FRAC : 0;
+      const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;
       return {name:b, billed:bill, target, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
     }).sort((a,b)=> b.spendM-a.spendM || a.name.localeCompare(b.name));
     const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
@@ -389,7 +404,7 @@ function execData(){
     return {key:ch.key, label:ch.label, accounts, tot};
   });
   const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
-  return {channels, top, monthly};
+  return {channels, top, monthly, month:targetMonth, isCurrent};
 }
 
 function usd(n){ n=Math.round(Number(n)||0); return (n<0?'-$':'$')+Math.abs(n).toLocaleString(); }
@@ -397,34 +412,42 @@ function pacingCell(p){ if(p==null) return '<span class="muted">—</span>';
   const c = p>0.05?'neg':(p<-0.05?'mid':'pos'); return `<span class="pace ${c}">${(p>=0?'+':'')+Math.round(p*100)}%</span>`; }
 
 function renderExec(){
-  const ed = EXEC_DATA = execData();
-  const sections = ed.channels.map(ch=>{
+  const ed = EXEC_DATA = execData(EXEC_MONTH||MONTH);
+  const spendHdr = ed.isCurrent ? 'MTD Spend' : 'Month Spend';
+  const projHdr  = ed.isCurrent ? 'Projected' : 'Final';
+  const section = ch=>{
     const rows = ch.accounts.map(a=>
       `<tr><td>${esc(a.name)}</td><td>${usd(a.billed)}</td><td>${usd(a.target)}</td><td><b>${usd(a.spendM)}</b></td><td>${usd(a.spendYTD)}</td><td>${usd(a.projected)}</td><td>${pacingCell(a.pacing)}</td></tr>`
     ).join('');
     const t = ch.tot;
     return `<div class="exec-sec"><div class="exec-cap">${esc(ch.label)}</div>
       <table><thead><tr>
-        <th>Account</th><th>Total Billed</th><th>Ad Spend Target</th><th>MTD Spend</th><th>YTD Spend</th><th>Projected</th><th>Pacing</th>
+        <th>Account</th><th>Total Billed</th><th>Ad Spend Target</th><th>${spendHdr}</th><th>YTD Spend</th><th>${projHdr}</th><th>Pacing</th>
       </tr></thead><tbody>
-        ${rows || '<tr><td colspan="7" class="muted">No data yet</td></tr>'}
+        ${rows || '<tr><td colspan="7" class="muted">No data</td></tr>'}
         <tr class="exec-tot"><td>Total</td><td>${usd(t.billed)}</td><td>${usd(t.target)}</td><td>${usd(t.spendM)}</td><td>${usd(t.spendYTD)}</td><td>${usd(t.projected)}</td><td>${pacingCell(t.pacing)}</td></tr>
       </tbody></table></div>`;
-  }).join('');
+  };
+  const sections = ed.channels.map(section).join('');
   const top = ed.top;
   const topline = `<div class="exec-sec"><table><thead><tr>
-      <th>Top Line — all channels</th><th>Total Billed</th><th>Ad Spend Target</th><th>MTD Spend</th><th>YTD Spend</th><th>Projected</th><th></th></tr></thead>
+      <th>Top Line — all channels</th><th>Total Billed</th><th>Ad Spend Target</th><th>${spendHdr}</th><th>YTD Spend</th><th>${projHdr}</th><th></th></tr></thead>
     <tbody><tr class="exec-top"><td>All channels</td><td>${usd(top.billed)}</td><td>${usd(top.target)}</td><td>${usd(top.spendM)}</td><td>${usd(top.spendYTD)}</td><td>${usd(top.projected)}</td><td></td></tr></tbody></table></div>`;
+  const monthOpts = execMonthList().map(m=>`<option value="${m}"${m===ed.month?' selected':''}>${monthLabel(m)}</option>`).join('');
   document.getElementById('execView').innerHTML = `
-    <div class="integrity-note">Executive summary · YTD ${now.getFullYear()} · month ${MONTH} · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}. Spend = raw platform spend; Billed = client budget; Ad Spend Target = billed × (1 − fee).</div>
+    <div class="toolbar" style="margin:6px 0 2px">
+      <label class="muted" style="font-size:13px">Month</label>
+      <select id="execMonthSel" onchange="setExecMonth(this.value)">${monthOpts}</select>
+      <span class="muted" style="font-size:12px">Spend = raw platform spend · Billed = client budget · Target = billed × (1 − fee) · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
+    </div>
     <div class="exec-chartcard">
       <div class="exec-chart-head"><b>Total spend</b>
         <div class="seg" id="execChartSeg">
-          <button data-m="time" class="${EXEC_CHART_MODE==='time'?'on':''}" onclick="setExecChart('time')">Over time</button>
-          <button data-m="account" class="${EXEC_CHART_MODE==='account'?'on':''}" onclick="setExecChart('account')">By account (YTD)</button>
+          <button data-m="time" class="${EXEC_CHART_MODE==='time'?'on':''}" onclick="setExecChart('time')">Over time (YTD)</button>
+          <button data-m="account" class="${EXEC_CHART_MODE==='account'?'on':''}" onclick="setExecChart('account')">By account</button>
         </div>
       </div>
-      <canvas id="execCanvas" width="1000" height="240"></canvas>
+      <canvas id="execCanvas"></canvas>
     </div>
     ${sections}${topline}`;
   drawExecChart();
@@ -437,7 +460,15 @@ function setExecChart(m){ EXEC_CHART_MODE=m;
 function execMoneyShort(n){ n=Math.round(n); return n>=1000 ? '$'+(n/1000).toFixed(n>=10000?0:1)+'k' : '$'+n; }
 function drawExecChart(){
   const ed = EXEC_DATA; const cv=document.getElementById('execCanvas'); if(!ed||!cv) return;
-  const ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
+  // Size the backing buffer to the displayed size × devicePixelRatio, so it's crisp
+  // and not stretched (was drawing a fixed 1000×240 buffer into a wider box).
+  const dpr = window.devicePixelRatio||1;
+  const cssW = Math.max(320, Math.round(cv.getBoundingClientRect().width || (cv.parentElement&&cv.parentElement.clientWidth) || 900));
+  const cssH = 240;
+  cv.width = Math.round(cssW*dpr); cv.height = Math.round(cssH*dpr);
+  cv.style.height = cssH+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const W=cssW, H=cssH;
   ctx.clearRect(0,0,W,H);
   const COL={google:'#f26722',lsa:'#1f9d5b',meta:'#3b6fb0'}, KEYS=['google','lsa','meta'], KLAB={google:'Google',lsa:'LSA',meta:'Meta'};
   let cats=[], dataFn, labelFn;
@@ -446,8 +477,8 @@ function drawExecChart(){
     dataFn = (c,k)=> ed.monthly[c][k]||0;
     labelFn = c=> monthLabel(c);
   } else {
-    const acc={};
-    ed.channels.forEach(ch=> ch.accounts.forEach(a=>{ (acc[a.name]=acc[a.name]||{google:0,lsa:0,meta:0})[ch.key]+=a.spendYTD; }));
+    const acc={};   // by account, for the SELECTED month
+    ed.channels.forEach(ch=> ch.accounts.forEach(a=>{ (acc[a.name]=acc[a.name]||{google:0,lsa:0,meta:0})[ch.key]+=a.spendM; }));
     cats = Object.keys(acc).sort((a,b)=> (acc[b].google+acc[b].lsa+acc[b].meta)-(acc[a].google+acc[a].lsa+acc[a].meta)).slice(0,12);
     dataFn = (c,k)=> acc[c][k]||0;
     labelFn = c=> c.length>11 ? c.slice(0,11)+'…' : c;
@@ -470,6 +501,7 @@ function drawExecChart(){
   let lx=padL;
   KEYS.forEach(k=>{ ctx.fillStyle=COL[k]; ctx.fillRect(lx, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.font='11px sans-serif'; ctx.textAlign='left'; ctx.fillText(KLAB[k], lx+14, H-3); lx+=72; });
 }
+window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('execCanvas')) drawExecChart(); });
 // Gross-up factor: turns ad spend into what the client is billed.
 // Uses each account's own budget split (gross ÷ ad-spend target), so a mixed
 // Google 25% / Meta 20% account grosses up exactly right.

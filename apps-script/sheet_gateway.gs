@@ -155,10 +155,11 @@ function writeCache_(name, str) {
   } catch (e) { /* oversized or unavailable → just skip caching */ }
 }
 
-// Budgets + Meta both auto-sync at most ONCE PER DAY. The two are independent —
-// Meta syncs even when budgets aren't configured, and vice versa.
+// Budgets auto-sync at most ONCE PER DAY on the data path (a quick read of the
+// budget sheet). Meta is deliberately NOT synced here — reading the big DataSlayer
+// block is slow, so it runs in the background on a daily trigger (dailyAutoSync_)
+// and via the manual "Sync Meta now" button. This keeps app loads fast.
 function maybeAutoSync_(cfg) {
-  // Budgets: across every configured channel.
   if (String(cfg.budgetAutoSync) !== 'false' &&
       cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined &&
       String(cfg.lastBudgetSync || '') !== currentDate_()) {
@@ -169,12 +170,34 @@ function maybeAutoSync_(cfg) {
       catch (e) { /* leave that channel's snapshot in place */ }
     });
   }
-  // Meta daily spend/metrics: pulled from the DataSlayer sheet.
-  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl &&
-      String(cfg.lastMetaSync || '') !== currentDate_()) {
-    try { syncMeta_({ source: 'auto' }); }
-    catch (e) { /* leave the prior Meta_Daily snapshot in place */ }
+}
+
+// Run ONCE from the Apps Script editor to schedule the daily background sync, so no
+// user request ever waits on the DataSlayer read. Safe to re-run (replaces itself).
+function installDailyTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyAutoSync_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('dailyAutoSync_').timeBased().everyDays(1).atHour(6).create();
+  return 'Daily background sync scheduled (~6am).';
+}
+
+// The scheduled background job: refresh budgets (all mapped channels) + Meta once.
+function dailyAutoSync_() {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var cfg = readConfig_(ss);
+  if (cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined) {
+    ['google', 'lsa', 'meta'].forEach(function (ch) {
+      var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
+      if (!cfg['budget' + platform + 'Col']) return;
+      try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
+      catch (e) {}
+    });
   }
+  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl) {
+    try { syncMeta_({ source: 'auto' }); } catch (e) {}
+  }
+  bustCache_();
 }
 
 function getDataString_(force) {
@@ -692,7 +715,46 @@ function syncBudgets_(p) {
   if (channel === 'lsa') save.lsaMonths = amountCols.length;
   setConfigMany_(save);
 
+  // LSA also gets a per-MONTH billed row for the current month (= the newest column
+  // in the list, since a new month's column is appended each month). This is what the
+  // exec view reads, so it shows what we billed for the month — not the running pool.
+  if (channel === 'lsa' && amountCols.length) {
+    var lastCol = amountCols[amountCols.length - 1];
+    var monthRows = [];
+    for (var mr = 1; mr < values.length; mr++) {
+      var mlab = String(values[mr][labelCol] || '').trim();
+      if (!mlab) continue;
+      var mv = parseNumber_(values[mr][lastCol]);
+      if (mv == null) continue;
+      monthRows.push({ label: mlab, amount: mv });
+    }
+    upsertBudgetMonth_(ss, 'LSA', currentMonth_(), monthRows);
+  }
+
   return { ok: true, synced: parsed.length, month: month, platform: platform, channel: channel, changed: changes.length };
+}
+
+// Replace every (platform, month) row in the Budgets tab with the supplied rows,
+// leaving all other months/platforms (including the LSA 'pool' row) untouched.
+function upsertBudgetMonth_(ss, platform, month, rows) {
+  var bt = ss.getSheetByName(TABS.budgets.name) || ss.insertSheet(TABS.budgets.name);
+  ensureHeader_(bt, TABS.budgets);
+  var bvals = bt.getDataRange().getValues();
+  var head = headIndex_(bvals[0]);
+  var keep = [TABS.budgets.header];
+  for (var i = 1; i < bvals.length; i++) {
+    var row = bvals[i];
+    if (row.every(function (c) { return c === '' || c === null; })) continue;
+    var sameM = String(row[head.Month]).trim() === month;
+    var sameP = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
+    if (sameM && sameP) continue;   // drop → replaced below
+    keep.push(row);
+  }
+  var now = new Date();
+  rows.forEach(function (r) { keep.push([r.label, platform, month, r.amount, now]); });
+  bt.clearContents();
+  bt.getRange(1, 1, keep.length, TABS.budgets.header.length).setValues(keep);
+  forceText_(bt, TABS.budgets);
 }
 
 // Append change rows to Budget_Changes and email the flag recipients.
