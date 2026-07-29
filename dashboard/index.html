@@ -413,15 +413,16 @@ function execData(targetMonth){
     const names = new Set([...Object.keys(billed), ...Object.keys(spendM), ...Object.keys(spendY)]);
     const accounts = [...names].map(b=>{
       const bill=billed[b]||0, target=bill*fee1, fees=bill-target, sm=spendM[b]||0, sy=spendY[b]||0;
-      const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;
-      return {name:b, billed:bill, target, fees, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
+      const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;   // raw ad spend (final for past months)
+      const spendFee = fee1>0 ? projected/fee1 : projected;   // grossed up by fee = billed-equivalent of actual spend
+      return {name:b, billed:bill, target, fees, spendM:sm, spendYTD:sy, projected, spendFee, pacing: target>0 ? projected/target-1 : null};
     }).filter(a=> a.billed>0 || (!isCurrent && a.spendM>0))   // current: billed accounts; past: billed or spent
       .sort((a,b)=> b.billed-a.billed || b.spendM-a.spendM || a.name.localeCompare(b.name));
-    const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,fees:a.fees+x.fees,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
+    const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,fees:a.fees+x.fees,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected,spendFee:a.spendFee+x.spendFee}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0,spendFee:0});
     tot.pacing = tot.target>0 ? tot.projected/tot.target-1 : null;
     return {key:ch.key, label:ch.label, accounts, tot};
   });
-  const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,fees:a.fees+c.tot.fees,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
+  const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,fees:a.fees+c.tot.fees,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected,spendFee:a.spendFee+c.tot.spendFee}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0,spendFee:0});
   top.pacing = top.target>0 ? top.projected/top.target-1 : null;
   // per-month billed (all channels) vs spent, for the compare chart
   const monthlyBilled = {};
@@ -448,36 +449,36 @@ function pacingCell(p){ if(p==null) return '<span class="muted">—</span>';
 
 function renderExec(){
   const ed = EXEC_DATA = execData(EXEC_MONTH||MONTH);
-  const projHdr = ed.isCurrent ? 'Projected' : 'Final';
+  const spfHdr = ed.isCurrent ? 'Proj. + Fee' : 'Spent + Fee';   // billed-equivalent of actual spend
   const COLORS = {google:'#f26722', lsa:'#1f9d5b', meta:'#3b6fb0'};
   const dash = v=> v>0 ? usd(v) : '<span class="muted">—</span>';   // no budget on record → "—", not $0
   const emptyMsg = ed.isCurrent ? 'No accounts billed this month' : 'No spend recorded this month';
   const section = ch=>{
     const rows = ch.accounts.map(a=>
-      `<tr><td>${esc(a.name)}</td><td>${dash(a.billed)}</td><td class="muted">${dash(a.fees)}</td><td><b>${usd(a.projected)}</b></td><td>${usd(a.spendYTD)}</td><td>${pacingCell(a.pacing)}</td></tr>`
+      `<tr><td>${esc(a.name)}</td><td>${dash(a.billed)}</td><td class="muted">${dash(a.fees)}</td><td><b>${usd(a.spendFee)}</b></td><td>${usd(a.spendYTD)}</td><td>${pacingCell(a.pacing)}</td></tr>`
     ).join('');
     const t = ch.tot;
     return `<div class="exec-sec">
       <div class="exec-cap"><span class="dot" style="background:${COLORS[ch.key]}"></span>${esc(ch.label)}</div>
       <table><thead><tr>
-        <th>Account</th><th>Billed</th><th>Fees</th><th>${projHdr}</th><th>YTD Spend</th><th>Pacing</th>
+        <th>Account</th><th>Billed</th><th>Fees</th><th>${spfHdr}</th><th>YTD Spend</th><th>Pacing</th>
       </tr></thead><tbody>
         ${rows || `<tr><td colspan="6" class="muted">${emptyMsg}</td></tr>`}
-        <tr class="exec-tot"><td>Total</td><td>${dash(t.billed)}</td><td>${dash(t.fees)}</td><td>${usd(t.projected)}</td><td>${usd(t.spendYTD)}</td><td>${pacingCell(t.pacing)}</td></tr>
+        <tr class="exec-tot"><td>Total</td><td>${dash(t.billed)}</td><td>${dash(t.fees)}</td><td>${usd(t.spendFee)}</td><td>${usd(t.spendYTD)}</td><td>${pacingCell(t.pacing)}</td></tr>
       </tbody></table></div>`;
   };
   const sections = ed.channels.map(section).join('');
   const top = ed.top;
   const topline = `<div class="exec-top-card">
     <div class="exec-cap"><span class="dot" style="background:var(--accent)"></span>Top Line — all channels</div>
-    <table><thead><tr><th>All channels</th><th>Billed</th><th>Fees</th><th>${projHdr}</th><th>YTD Spend</th><th>Pacing</th></tr></thead>
-    <tbody><tr><td>Total</td><td>${dash(top.billed)}</td><td>${dash(top.fees)}</td><td>${usd(top.projected)}</td><td>${usd(top.spendYTD)}</td><td>${pacingCell(top.pacing)}</td></tr></tbody></table></div>`;
+    <table><thead><tr><th>All channels</th><th>Billed</th><th>Fees</th><th>${spfHdr}</th><th>YTD Spend</th><th>Pacing</th></tr></thead>
+    <tbody><tr><td>Total</td><td>${dash(top.billed)}</td><td>${dash(top.fees)}</td><td>${usd(top.spendFee)}</td><td>${usd(top.spendYTD)}</td><td>${pacingCell(top.pacing)}</td></tr></tbody></table></div>`;
   const monthOpts = execMonthList().map(m=>`<option value="${m}"${m===ed.month?' selected':''}>${monthLabel(m)}</option>`).join('');
   document.getElementById('execView').innerHTML = `
     <div class="toolbar" style="margin:8px 0 2px">
       <label class="muted" style="font-size:13px;width:auto">Month</label>
       <select id="execMonthSel" onchange="setExecMonth(this.value)">${monthOpts}</select>
-      <span class="muted" style="font-size:12px">Billed = what we invoiced · Fees = our margin · ${projHdr} = ${ed.isCurrent?'forecast':'final'} ad spend · Pacing = projected vs ad-spend target${ed.isCurrent?'':' · billed/fees only where a budget was saved that month'} · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
+      <span class="muted" style="font-size:12px">Billed = what we invoiced · Fees = our margin · ${spfHdr} = ${ed.isCurrent?'projected':'actual'} ad spend grossed up by the fee (comparable to Billed) · Pacing = ${spfHdr} vs Billed${ed.isCurrent?'':' · billed/fees only where a budget was saved that month'} · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
     </div>
     ${topline}
     <div class="exec-chartcard">
