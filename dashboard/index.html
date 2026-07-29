@@ -854,7 +854,7 @@ function correctionBadge(series, pace){
 /* ── render ────────────────────────────────────────────────────────── */
 function visible(){
   let rows = MODEL.slice();
-  if(view==='active') rows = rows.filter(r=> r.live && !r.hidden);
+  if(view==='active') rows = rows.filter(r=> (r.live || r.spend>0) && !r.hidden);   // active, or paused-but-spent-this-month
   else if(view==='problems') rows = rows.filter(r=> !r.hidden && r.alert && (r.alert.tier==='warn'||r.alert.tier==='crit'));
   // 'all' includes hidden rows so they can be restored
   const q = document.getElementById('search').value.trim().toLowerCase();
