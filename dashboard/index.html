@@ -247,6 +247,17 @@
     </div>
     <div class="hint">One account column (e.g. <b>A</b>), then the budget column for each channel by letter. <b>LSA takes a comma-separated list</b> (e.g. <b>M,N,O</b>) — the tool sums those months into one running pool and paces the leftover forward. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Each month, add the new month's letter (Google/Meta swap it, LSA append it). Share the sheet with the account that runs the gateway.</div>
 
+    <h3 style="margin:14px 0 4px">Meta / Facebook import</h3>
+    <div class="hint">Pulls daily Meta spend + metrics from your DataSlayer sheet into the tool. Franchise = the <b>Campaign tag</b> — campaigns with no tag are ignored (they show as inactive). Share the DataSlayer sheet with the account that runs the gateway. Auto-syncs once a day; hit Sync any time you refresh the data.</div>
+    <div class="settings-row"><label>Meta sheet URL</label><input id="setMetaUrl" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
+    <div class="settings-row"><label>Tab name</label><input id="setMetaTab" placeholder="QUERY - RAW DATA"></div>
+    <div class="settings-row"><label>Column range</label><input id="setMetaRange" placeholder="AH:AP" style="max-width:120px;text-transform:uppercase"> <span class="muted" style="font-size:12px">the block holding Date → On Facebook Leads</span></div>
+    <div class="settings-row"><label></label>
+      <button onclick="previewMeta()">Preview</button>
+      <button class="primary" onclick="syncMeta()">Sync Meta now</button>
+      <span id="metaMsg" class="muted" style="flex:1"></span>
+    </div>
+
     <h3 style="margin:14px 0 4px">Alerts</h3>
     <div class="hint">Flags compare the last 30 days against the previous 30 days. If leads drop but spend dropped about as much, it's treated as a light "budget" note, not a real problem. Higher percentages = fewer, stronger alerts.</div>
     <div class="settings-row"><label>Min leads to judge</label><input id="setMinLeads" type="number" step="1" min="0"> <span class="muted" style="font-size:12px">skip accounts below this prior-30-day volume (kills noise)</span></div>
@@ -1124,6 +1135,10 @@ function openSettings(){
   setColL('setMetaColL', CFG.budgetMetaCol);
   document.getElementById('syncMsg').textContent =
     CFG.lastBudgetSync ? `last auto-sync ${CFG.lastBudgetSync}` : 'no auto-sync yet';
+  document.getElementById('setMetaUrl').value   = CFG.metaSheetUrl||'';
+  document.getElementById('setMetaTab').value   = CFG.metaTab||'';
+  document.getElementById('setMetaRange').value = CFG.metaRange||'';
+  document.getElementById('metaMsg').textContent = CFG.lastMetaSync ? `last sync ${CFG.lastMetaSync}` : 'never synced';
   document.getElementById('setName').value = LS.name();
   document.getElementById('setUrl').value = localStorage.getItem('pace_url')||'';
   document.getElementById('setSecret').value = localStorage.getItem('pace_secret')||'';
@@ -1147,7 +1162,10 @@ async function saveSettings(){
     alertLeadsCrit: Number(val('setLeadsCrit'))/100,
     alertCplWarn:   Number(val('setCplWarn'))/100,
     alertCplCrit:   Number(val('setCplCrit'))/100,
-    emailTo:        val('setEmailTo')
+    emailTo:        val('setEmailTo'),
+    metaSheetUrl:   val('setMetaUrl'),
+    metaTab:        val('setMetaTab'),
+    metaRange:      val('setMetaRange')
   };
   const res = await call({action:'setConfigBatch', pairs: JSON.stringify(pairs)});
   if(!res || !res.ok){ alert('Settings failed to save: '+((res&&res.error)||'?')); return; }
@@ -1240,6 +1258,28 @@ async function syncAllChannels(){
   for(const ch of ['google','lsa','meta']){
     if(document.getElementById(CH_COL[ch]).value.trim()) await syncChannel(ch);
   }
+}
+
+async function previewMeta(){
+  const msg = document.getElementById('metaMsg');
+  const url = val('setMetaUrl');
+  if(!url){ msg.textContent = 'enter the Meta sheet URL first'; return; }
+  msg.textContent = 'checking…';
+  const res = await call({ action:'metaPreview', url, tab:val('setMetaTab'), range:val('setMetaRange') });
+  if(!res || !res.ok){ msg.textContent = 'failed: '+((res&&res.error)||'?'); return; }
+  const n = res.franchises.length;
+  msg.textContent = `${n} franchise${n===1?'':'s'} with tags · ${res.tagged} rows · ${res.noTag} untagged (ignored)`;
+}
+async function syncMeta(){
+  const msg = document.getElementById('metaMsg');
+  const url = val('setMetaUrl');
+  if(!url){ msg.textContent = 'enter the Meta sheet URL first'; return; }
+  msg.textContent = 'syncing…';
+  const res = await call({ action:'syncMeta', url, tab:val('setMetaTab'), range:val('setMetaRange') });
+  if(!res || !res.ok){ msg.textContent = 'failed: '+((res&&res.error)||'?'); return; }
+  msg.textContent = `synced ${res.synced} rows · ${res.franchises} franchises · ${res.skipped} untagged skipped`;
+  CFG.metaSheetUrl=url; CFG.metaTab=val('setMetaTab'); CFG.metaRange=val('setMetaRange');
+  load(true);
 }
 
 /* ── util ──────────────────────────────────────────────────────────── */

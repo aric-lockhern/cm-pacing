@@ -38,8 +38,11 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |
 
-> Meta spend is written to the `Meta_Daily` tab by a separate process; the
-> gateway and dashboard read it but there's no Meta script in this repo yet.
+> Meta has no Google Ads-style script (Meta can't run one). Instead the gateway
+> **pulls Meta daily spend + metrics from a DataSlayer Google Sheet** into
+> `Meta_Daily` — configured under **Settings ▸ Meta / Facebook import**. The
+> franchise is the campaign **tag**; untagged campaigns are skipped. It rewrites
+> `Meta_Daily` on each sync (rolling window) and auto-syncs once a day.
 
 ## Setup
 

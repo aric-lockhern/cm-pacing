@@ -68,6 +68,8 @@ function doGet(e) {
       case 'syncBudgets':  out = syncBudgets_(p); break;
       case 'budgetTabs':   out = budgetTabs_(p.url); break;
       case 'budgetColumns':out = budgetColumns_(p.url, p.tab); break;
+      case 'syncMeta':     out = syncMeta_(p); break;
+      case 'metaPreview':  out = metaPreview_(p.url, p.tab, p.range); break;
       case 'setType':    out = setGroupField_(p.label, 'Type', p.value); break;
       case 'setManager': out = setGroupField_(p.label, 'Manager', p.value); break;
       case 'setHidden':  out = setGroupField_(p.label, 'Hidden', p.value); break;
@@ -153,17 +155,26 @@ function writeCache_(name, str) {
   } catch (e) { /* oversized or unavailable → just skip caching */ }
 }
 
-// Budgets auto-sync at most ONCE PER DAY, across every configured channel.
+// Budgets + Meta both auto-sync at most ONCE PER DAY. The two are independent —
+// Meta syncs even when budgets aren't configured, and vice versa.
 function maybeAutoSync_(cfg) {
-  if (String(cfg.budgetAutoSync) === 'false') return;
-  if (!cfg.budgetSheetUrl || cfg.budgetLabelCol === undefined) return;
-  if (String(cfg.lastBudgetSync || '') === currentDate_()) return;   // already ran today
-  ['google', 'lsa', 'meta'].forEach(function (ch) {
-    var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
-    if (!cfg['budget' + platform + 'Col']) return;                    // channel not mapped
-    try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
-    catch (e) { /* leave that channel's snapshot in place */ }
-  });
+  // Budgets: across every configured channel.
+  if (String(cfg.budgetAutoSync) !== 'false' &&
+      cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined &&
+      String(cfg.lastBudgetSync || '') !== currentDate_()) {
+    ['google', 'lsa', 'meta'].forEach(function (ch) {
+      var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
+      if (!cfg['budget' + platform + 'Col']) return;                  // channel not mapped
+      try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
+      catch (e) { /* leave that channel's snapshot in place */ }
+    });
+  }
+  // Meta daily spend/metrics: pulled from the DataSlayer sheet.
+  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl &&
+      String(cfg.lastMetaSync || '') !== currentDate_()) {
+    try { syncMeta_({ source: 'auto' }); }
+    catch (e) { /* leave the prior Meta_Daily snapshot in place */ }
+  }
 }
 
 function getDataString_(force) {
@@ -240,6 +251,7 @@ function readTab_(ss, def) {
 function readConfig_(ss) {
   var rows = readTab_(ss, TABS.config);
   var cfg = { googleFee: 0.25, metaFee: 0.20, budgetSheetUrl: '',
+              metaSheetUrl: '', metaTab: '', metaRange: '', metaAutoSync: true,
               emailTo: 'aric@contentmassive.com,larry@contentmassive.com,manuel@contentmassive.com', budgetAutoSync: true,
               lsaFee: 0.20, lsaMonths: 1,
               alertMinLeads: 10, alertLeadsWarn: 0.25, alertLeadsCrit: 0.50,
@@ -412,6 +424,142 @@ function writeMetaDaily_(rows) {
                    r.clicks || 0, r.conv || 0, r.revenue || 0]);
   });
 }
+
+/* ── Meta sync from the DataSlayer sheet (column-mapped by header) ────────────
+ * The DataSlayer query writes a daily block (Date … On Facebook Leads) somewhere
+ * in a wide tab; we read just that column block (e.g. AH:AP). Franchise = the
+ * Campaign tag, so only campaigns carrying a tag are imported — untagged ones are
+ * skipped (they show as inactive). Meta_Daily is REWRITTEN every sync (rolling
+ * window, like the Google feed), so re-runs never double-count.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+// 'AH:AP' -> { start: 34, width: 9 }  (1-based start column). null if malformed.
+function colBlock_(range) {
+  var m = String(range || '').toUpperCase().replace(/\$/g, '').match(/^([A-Z]+)\s*:\s*([A-Z]+)$/);
+  if (!m) return null;
+  var a = colToNum_(m[1]), b = colToNum_(m[2]);
+  if (!a || !b) return null;
+  var start = Math.min(a, b), end = Math.max(a, b);
+  return { start: start, width: end - start + 1 };
+}
+function colToNum_(s) {
+  s = String(s || '').toUpperCase(); var n = 0;
+  for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i) - 64; if (c < 1 || c > 26) return 0; n = n * 26 + c; }
+  return n;
+}
+
+// Locate each KPI column within the block's header row (by name, with a few aliases).
+function metaColMap_(H) {
+  function pick(al) { for (var i = 0; i < al.length; i++) { if (H[al[i]] !== undefined) return H[al[i]]; } return -1; }
+  var map = {
+    date:     pick(['Date', 'Day']),
+    tag:      pick(['Campaign tags', 'Campaign tag', 'Tags', 'Tag']),
+    campaign: pick(['Campaign name', 'Campaign']),
+    spend:    pick(['Total Cost', 'Cost', 'Amount spent', 'Spend']),
+    impr:     pick(['Impressions', 'Impr']),
+    clicks:   pick(['Clicks', 'Link clicks']),
+    webConv:  pick(['Website conversions', 'Web conversions', 'Website Conversions']),
+    fbLeads:  pick(['On Facebook Leads', 'On-Facebook Leads', 'Facebook Leads', 'Leads'])
+  };
+  var missing = [];
+  ['date', 'tag', 'campaign', 'spend'].forEach(function (k) { if (map[k] < 0) missing.push(k); });
+  map.missing = missing;
+  return map;
+}
+
+// True for a tag cell that means "no franchise" (skip the row).
+function metaNoTag_(tag) {
+  var t = String(tag || '').trim();
+  return t === '' || t === '--' || t.toLowerCase() === 'n/a';
+}
+
+function metaSource_(p, cfg) {
+  return {
+    url:   p.url   || cfg.metaSheetUrl,
+    tab:   p.tab   || cfg.metaTab   || 'QUERY - RAW DATA',
+    range: p.range || cfg.metaRange || 'AH:AP'
+  };
+}
+
+// Read-only peek so the app can show what WOULD import before committing.
+function metaPreview_(url, tab, range) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var s = metaSource_({ url: url, tab: tab, range: range }, readConfig_(ss));
+  if (!s.url) return { ok: false, error: 'no Meta sheet url' };
+  var src;
+  try { src = SpreadsheetApp.openByUrl(s.url); }
+  catch (e) { return { ok: false, error: 'cannot open Meta sheet (share it with this account): ' + e }; }
+  var t = src.getSheetByName(s.tab);
+  if (!t) return { ok: false, error: 'tab "' + s.tab + '" not found' };
+  var block = colBlock_(s.range);
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AP)' };
+  var lastRow = t.getLastRow();
+  if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
+
+  var values = t.getRange(1, block.start, Math.min(lastRow, 1000), block.width).getValues();  // sample
+  var col = metaColMap_(headIndex_(values[0].map(function (h) { return String(h).trim(); })));
+  if (col.missing.length) return { ok: false, columns: values[0], error: 'missing columns in ' + s.range + ': ' + col.missing.join(', ') };
+
+  var tags = {}, tagged = 0, noTag = 0;
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    if (String(row[col.campaign] || '').trim() === '' && parseNumber_(row[col.spend]) == null) continue;  // spacer
+    if (metaNoTag_(row[col.tag])) { noTag++; continue; }
+    tags[String(row[col.tag]).trim()] = true; tagged++;
+  }
+  return { ok: true, columns: values[0], franchises: Object.keys(tags).sort(), tagged: tagged, noTag: noTag };
+}
+
+function syncMeta_(p) {
+  p = p || {};
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var s = metaSource_(p, readConfig_(ss));
+  if (!s.url) return { ok: false, error: 'no Meta sheet url' };
+
+  var src;
+  try { src = SpreadsheetApp.openByUrl(s.url); }
+  catch (e) { return { ok: false, error: 'cannot open Meta sheet (share it with this account): ' + e }; }
+  var tab = src.getSheetByName(s.tab);
+  if (!tab) return { ok: false, error: 'tab "' + s.tab + '" not found' };
+  var block = colBlock_(s.range);
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AP)' };
+  var lastRow = tab.getLastRow();
+  if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
+
+  var values = tab.getRange(1, block.start, lastRow, block.width).getValues();
+  var col = metaColMap_(headIndex_(values[0].map(function (h) { return String(h).trim(); })));
+  if (col.missing.length) return { ok: false, error: 'missing columns in ' + s.range + ': ' + col.missing.join(', ') };
+
+  var out = [], skipped = 0, tags = {};
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var camp = String(row[col.campaign] || '').trim();
+    var spendRaw = parseNumber_(row[col.spend]);
+    if (!camp && spendRaw == null) continue;                       // blank spacer row
+    if (metaNoTag_(row[col.tag])) { skipped++; continue; }         // no tag → inactive, excluded
+    var date = normalize_(row[col.date]);
+    if (!date) continue;
+    var impr = col.impr   < 0 ? 0 : (parseNumber_(row[col.impr])   || 0);
+    var clk  = col.clicks < 0 ? 0 : (parseNumber_(row[col.clicks]) || 0);
+    var conv = (col.webConv < 0 ? 0 : (parseNumber_(row[col.webConv]) || 0)) +
+               (col.fbLeads < 0 ? 0 : (parseNumber_(row[col.fbLeads]) || 0));
+    out.push([date, String(row[col.tag]).trim(), camp, round2_(spendRaw || 0), impr, clk, round2_(conv), 0]);
+    tags[String(row[col.tag]).trim()] = true;
+  }
+
+  // Full rewrite of Meta_Daily (rolling window; never stacks duplicates on re-sync).
+  var mt = ss.getSheetByName(TABS.metaDaily.name) || ss.insertSheet(TABS.metaDaily.name);
+  mt.clearContents();
+  var body = [TABS.metaDaily.header].concat(out);
+  mt.getRange(1, 1, body.length, TABS.metaDaily.header.length).setValues(body);
+  forceText_(mt, TABS.metaDaily);
+
+  setConfigMany_({ metaSheetUrl: s.url, metaTab: s.tab, metaRange: s.range, lastMetaSync: currentDate_() });
+  bustCache_();
+  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped };
+}
+
+function round2_(n) { return Math.round(Number(n) * 100) / 100; }
 
 /* ── budget sync from a linked sheet (column-mapped) ─────────────────────── */
 
