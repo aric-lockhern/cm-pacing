@@ -119,15 +119,28 @@
   .hint{font-size:12px;color:var(--faint);margin:2px 0 12px}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
 
-  /* exec view */
-  .exec-sec{margin:18px 0}
-  .exec-cap{font-weight:700;font-size:14px;margin:0 2px 6px;color:var(--ink)}
-  .exec-tot td{font-weight:700;border-top:2px solid var(--line)}
-  .exec-top td{font-weight:800;background:var(--panel2);font-size:15px}
-  .exec-chartcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 14px 10px;margin:6px 0 10px}
+  /* overview / exec view */
+  .exec-sec,.exec-top-card{margin:14px 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .exec-cap{font-weight:700;font-size:13.5px;padding:11px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .exec-cap .dot{width:9px;height:9px;border-radius:3px;flex:none}
+  .exec-sec table,.exec-top-card table{margin:0;table-layout:fixed}
+  .exec-sec th,.exec-top-card th{background:transparent;padding:8px 14px;border-bottom:1px solid var(--line)}
+  .exec-sec td,.exec-top-card td{padding:10px 14px}
+  .exec-sec th:first-child,.exec-sec td:first-child,.exec-top-card th:first-child,.exec-top-card td:first-child{width:26%;white-space:normal}
+  .exec-sec tbody tr:nth-child(even){background:#faf9fb}
+  .exec-sec tbody tr:hover{background:#f1f0f4}
+  .exec-tot td{font-weight:700;border-top:2px solid var(--line);background:var(--panel2)}
+  .exec-top-card{border-color:var(--accent);background:#fff6f0}
+  .exec-top-card .exec-cap{background:#ffe8db;border-bottom-color:#f3c9b2;color:var(--accent)}
+  .exec-top-card td{font-weight:800;font-size:15px}
+  .exec-sec .pace,.exec-top-card .pace{padding:2px 9px;border-radius:999px;font-size:12px;display:inline-block;font-weight:600}
+  .exec-sec .pace.pos,.exec-top-card .pace.pos{background:#eaf7ef;color:var(--good)}
+  .exec-sec .pace.mid,.exec-top-card .pace.mid{background:#fdf6e6;color:var(--warn)}
+  .exec-sec .pace.neg,.exec-top-card .pace.neg{background:#fdeeec;color:var(--bad)}
+  .exec-chartcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 14px 10px;margin:8px 0 10px}
   .exec-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .exec-chart-head b{font-size:14px}
-  #execCanvas{height:240px;margin-top:0}
+  #execCanvas{width:100%;height:240px;margin-top:0}
 </style>
 </head>
 <body>
@@ -137,7 +150,9 @@
     <button data-ch="google" onclick="setChannel('google')">Google Ads</button>
     <button data-ch="lsa" onclick="setChannel('lsa')">LSA</button>
     <button data-ch="meta" onclick="setChannel('meta')">Meta</button>
-    <button data-ch="exec" onclick="showExec()" title="Executive summary: total spend by channel and account, month + YTD">Exec</button>
+  </div>
+  <div class="seg" id="overviewSeg" style="margin-left:2px">
+    <button id="overviewBtn" onclick="showExec()" title="Leadership overview: billed, fees, projected spend and pacing by account">Overview</button>
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
@@ -322,6 +337,7 @@ function setChannel(ch){
   CHANNEL = ch; localStorage.setItem('pace_channel', ch);
   closeDD();
   document.getElementById('execView').style.display = 'none';
+  const ob=document.getElementById('overviewBtn'); if(ob) ob.classList.remove('on');
   showMain(true);
   if(DATA){ build(); render(); if(ch==='google') setTimeout(()=>prefetchCampaigns(), 30); }
 }
@@ -346,8 +362,9 @@ function showExec(){
   EXEC = true; localStorage.setItem('pace_exec','1'); closeDD();
   showMain(false);
   document.getElementById('execView').style.display = 'block';
-  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.toggle('on', b.dataset.ch==='exec'));
-  document.getElementById('monthLabel').textContent = `YTD ${now.getFullYear()} · month ${MONTH}`;
+  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
+  document.getElementById('overviewBtn').classList.add('on');
+  document.getElementById('monthLabel').textContent = `Overview · YTD ${now.getFullYear()}`;
   if(DATA) renderExec();
 }
 
@@ -395,15 +412,16 @@ function execData(targetMonth){
     const fee1 = 1-ch.fee;
     const names = new Set([...Object.keys(billed), ...Object.keys(spendM), ...Object.keys(spendY)]);
     const accounts = [...names].map(b=>{
-      const bill=billed[b]||0, target=bill*fee1, sm=spendM[b]||0, sy=spendY[b]||0;
+      const bill=billed[b]||0, target=bill*fee1, fees=bill-target, sm=spendM[b]||0, sy=spendY[b]||0;
       const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;
-      return {name:b, billed:bill, target, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
-    }).sort((a,b)=> b.spendM-a.spendM || a.name.localeCompare(b.name));
-    const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
+      return {name:b, billed:bill, target, fees, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
+    }).filter(a=> a.billed>0).sort((a,b)=> b.billed-a.billed || a.name.localeCompare(b.name));   // only accounts billed this month
+    const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,fees:a.fees+x.fees,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
     tot.pacing = tot.target>0 ? tot.projected/tot.target-1 : null;
     return {key:ch.key, label:ch.label, accounts, tot};
   });
-  const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
+  const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,fees:a.fees+c.tot.fees,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
+  top.pacing = top.target>0 ? top.projected/top.target-1 : null;
   return {channels, top, monthly, month:targetMonth, isCurrent};
 }
 
@@ -413,32 +431,34 @@ function pacingCell(p){ if(p==null) return '<span class="muted">—</span>';
 
 function renderExec(){
   const ed = EXEC_DATA = execData(EXEC_MONTH||MONTH);
-  const spendHdr = ed.isCurrent ? 'MTD Spend' : 'Month Spend';
-  const projHdr  = ed.isCurrent ? 'Projected' : 'Final';
+  const projHdr = ed.isCurrent ? 'Projected' : 'Final';
+  const COLORS = {google:'#f26722', lsa:'#1f9d5b', meta:'#3b6fb0'};
   const section = ch=>{
     const rows = ch.accounts.map(a=>
-      `<tr><td>${esc(a.name)}</td><td>${usd(a.billed)}</td><td>${usd(a.target)}</td><td><b>${usd(a.spendM)}</b></td><td>${usd(a.spendYTD)}</td><td>${usd(a.projected)}</td><td>${pacingCell(a.pacing)}</td></tr>`
+      `<tr><td>${esc(a.name)}</td><td>${usd(a.billed)}</td><td class="muted">${usd(a.fees)}</td><td><b>${usd(a.projected)}</b></td><td>${usd(a.spendYTD)}</td><td>${pacingCell(a.pacing)}</td></tr>`
     ).join('');
     const t = ch.tot;
-    return `<div class="exec-sec"><div class="exec-cap">${esc(ch.label)}</div>
+    return `<div class="exec-sec">
+      <div class="exec-cap"><span class="dot" style="background:${COLORS[ch.key]}"></span>${esc(ch.label)}</div>
       <table><thead><tr>
-        <th>Account</th><th>Total Billed</th><th>Ad Spend Target</th><th>${spendHdr}</th><th>YTD Spend</th><th>${projHdr}</th><th>Pacing</th>
+        <th>Account</th><th>Billed</th><th>Fees</th><th>${projHdr}</th><th>YTD Spend</th><th>Pacing</th>
       </tr></thead><tbody>
-        ${rows || '<tr><td colspan="7" class="muted">No data</td></tr>'}
-        <tr class="exec-tot"><td>Total</td><td>${usd(t.billed)}</td><td>${usd(t.target)}</td><td>${usd(t.spendM)}</td><td>${usd(t.spendYTD)}</td><td>${usd(t.projected)}</td><td>${pacingCell(t.pacing)}</td></tr>
+        ${rows || '<tr><td colspan="6" class="muted">No accounts billed this month</td></tr>'}
+        <tr class="exec-tot"><td>Total</td><td>${usd(t.billed)}</td><td>${usd(t.fees)}</td><td>${usd(t.projected)}</td><td>${usd(t.spendYTD)}</td><td>${pacingCell(t.pacing)}</td></tr>
       </tbody></table></div>`;
   };
   const sections = ed.channels.map(section).join('');
   const top = ed.top;
-  const topline = `<div class="exec-sec"><table><thead><tr>
-      <th>Top Line — all channels</th><th>Total Billed</th><th>Ad Spend Target</th><th>${spendHdr}</th><th>YTD Spend</th><th>${projHdr}</th><th></th></tr></thead>
-    <tbody><tr class="exec-top"><td>All channels</td><td>${usd(top.billed)}</td><td>${usd(top.target)}</td><td>${usd(top.spendM)}</td><td>${usd(top.spendYTD)}</td><td>${usd(top.projected)}</td><td></td></tr></tbody></table></div>`;
+  const topline = `<div class="exec-top-card">
+    <div class="exec-cap"><span class="dot" style="background:var(--accent)"></span>Top Line — all channels</div>
+    <table><thead><tr><th>All channels</th><th>Billed</th><th>Fees</th><th>${projHdr}</th><th>YTD Spend</th><th>Pacing</th></tr></thead>
+    <tbody><tr><td>Total</td><td>${usd(top.billed)}</td><td>${usd(top.fees)}</td><td>${usd(top.projected)}</td><td>${usd(top.spendYTD)}</td><td>${pacingCell(top.pacing)}</td></tr></tbody></table></div>`;
   const monthOpts = execMonthList().map(m=>`<option value="${m}"${m===ed.month?' selected':''}>${monthLabel(m)}</option>`).join('');
   document.getElementById('execView').innerHTML = `
-    <div class="toolbar" style="margin:6px 0 2px">
-      <label class="muted" style="font-size:13px">Month</label>
+    <div class="toolbar" style="margin:8px 0 2px">
+      <label class="muted" style="font-size:13px;width:auto">Month</label>
       <select id="execMonthSel" onchange="setExecMonth(this.value)">${monthOpts}</select>
-      <span class="muted" style="font-size:12px">Spend = raw platform spend · Billed = client budget · Target = billed × (1 − fee) · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
+      <span class="muted" style="font-size:12px">Billed = what we invoiced · Fees = our margin · ${projHdr} = ${ed.isCurrent?'forecast':'final'} ad spend · Pacing = projected vs ad-spend target · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
     </div>
     <div class="exec-chartcard">
       <div class="exec-chart-head"><b>Total spend</b>
