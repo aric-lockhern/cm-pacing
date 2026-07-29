@@ -430,10 +430,14 @@ function execData(targetMonth){
     if(!/^\d{4}-\d{2}$/.test(m) || m.slice(0,4)!==yr) return;   // skip 'pool' / other years
     monthlyBilled[m] = (monthlyBilled[m]||0) + (Number(r['Total Budget'])||0);
   });
+  // gross spend up by each channel's fee so "spent" is comparable to billed
+  const g1=1-(Number(CFG.googleFee)||0), l1=1-(Number(CFG.lsaFee)||0), m1=1-(Number(CFG.metaFee)||0);
   const monthlyCompare = {};
   new Set([...Object.keys(monthly), ...Object.keys(monthlyBilled)]).forEach(m=>{
-    const s = monthly[m] ? (monthly[m].google+monthly[m].lsa+monthly[m].meta) : 0;
-    monthlyCompare[m] = { billed: monthlyBilled[m]||0, spent: s };
+    const mo = monthly[m] || {google:0,lsa:0,meta:0};
+    const spent = mo.google+mo.lsa+mo.meta;
+    const withFee = (g1>0?mo.google/g1:mo.google) + (l1>0?mo.lsa/l1:mo.lsa) + (m1>0?mo.meta/m1:mo.meta);
+    monthlyCompare[m] = { billed: monthlyBilled[m]||0, spent, spentWithFee: withFee };
   });
   return {channels, top, monthly, monthlyCompare, month:targetMonth, isCurrent};
 }
@@ -539,13 +543,15 @@ function drawExecChart(){
   let lx=padL;
   KEYS.forEach(k=>{ ctx.fillStyle=COL[k]; ctx.fillRect(lx, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.font='11px sans-serif'; ctx.textAlign='left'; ctx.fillText(KLAB[k], lx+14, H-3); lx+=72; });
 }
-// Grouped bars per month: Billed (gross invoiced) vs Spent (raw ad spend), all channels.
+// Grouped bars per month: Billed (gross invoiced) vs Spent+Fee. The spent bar is
+// stacked — raw ad spend plus the fee grossed on top — so it's comparable to Billed.
 function drawExecCompare(ctx, W, H, ed){
   const cats = Object.keys(ed.monthlyCompare).sort();
-  const billed = cats.map(m=> ed.monthlyCompare[m].billed);
-  const spent  = cats.map(m=> ed.monthlyCompare[m].spent);
+  const billed  = cats.map(m=> ed.monthlyCompare[m].billed);
+  const spent   = cats.map(m=> ed.monthlyCompare[m].spent);
+  const withFee = cats.map(m=> ed.monthlyCompare[m].spentWithFee);
   const padL=52,padT=14,padB=40,padR=12;
-  const maxV=Math.max(...billed, ...spent, 1)*1.15;
+  const maxV=Math.max(...billed, ...withFee, 1)*1.15;
   const plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
   const n=Math.max(cats.length,1), step=plotW/n;
   const bw=Math.min(26, (step*0.7)/2 - 1);
@@ -554,16 +560,18 @@ function drawExecCompare(ctx, W, H, ed){
   [0,0.5,1].forEach(t=>{ const v=(maxV/1.15)*t, yy=y(v);
     ctx.strokeStyle='#e4e4ea'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
     ctx.fillStyle='#9a99a6'; ctx.fillText(execMoneyShort(v), padL-6, yy+3); });
-  const CB='#8f8fa6', CS='#f26722';   // billed = slate, spent = accent
+  const CB='#8f8fa6', CS='#f26722', CF='#f9c19b';   // billed slate, spend orange, fee light
   cats.forEach((m,i)=>{
     const cx=padL+step*i+step/2;
-    ctx.fillStyle=CB; ctx.fillRect(cx-bw-1, y(billed[i]), bw, Math.max(base-y(billed[i]),0));
-    ctx.fillStyle=CS; ctx.fillRect(cx+1,    y(spent[i]),  bw, Math.max(base-y(spent[i]),0));
+    ctx.fillStyle=CB; ctx.fillRect(cx-bw-1, y(billed[i]),  bw, Math.max(base-y(billed[i]),0));
+    ctx.fillStyle=CS; ctx.fillRect(cx+1,    y(spent[i]),   bw, Math.max(base-y(spent[i]),0));
+    ctx.fillStyle=CF; ctx.fillRect(cx+1,    y(withFee[i]), bw, Math.max(y(spent[i])-y(withFee[i]),0));
     if(i % Math.ceil(n/14) === 0 || i===n-1){ ctx.fillStyle='#6c6b78'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(monthLabel(m), cx, H-20); }
   });
-  ctx.textAlign='left'; ctx.font='11px sans-serif';
-  ctx.fillStyle=CB; ctx.fillRect(padL, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText('Billed', padL+14, H-3);
-  ctx.fillStyle=CS; ctx.fillRect(padL+72, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText('Spent', padL+86, H-3);
+  ctx.textAlign='left'; ctx.font='11px sans-serif'; let lx=padL;
+  [['Billed',CB],['Spent',CS],['+ Fee',CF]].forEach(function(pair){
+    ctx.fillStyle=pair[1]; ctx.fillRect(lx, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText(pair[0], lx+14, H-3); lx+=62;
+  });
 }
 window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('execCanvas')) drawExecChart(); });
 // Gross-up factor: turns ad spend into what the client is billed.
