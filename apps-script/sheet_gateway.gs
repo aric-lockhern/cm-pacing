@@ -633,15 +633,13 @@ function syncBudgets_(p) {
   var colKey   = 'budget' + platform + 'Col';                 // budgetGoogleCol / budgetLsaCol / budgetMetaCol
 
   var labelCol  = p.labelCol != null && p.labelCol !== '' ? Number(p.labelCol) : Number(cfg.budgetLabelCol);
-  // budgetCol can be a single index OR a comma list of indexes (LSA pool = sum of months)
+  // budgetCol can be a single index OR a comma list of month columns (newest last).
+  // Each column maps to a month; LSA also sums them into a running 'pool'.
   var budgetSpec = (p.budgetCol != null && p.budgetCol !== '') ? String(p.budgetCol) : String(cfg[colKey] || '');
   var amountCols = budgetSpec.split(',').map(function (x) { return Number(String(x).trim()); }).filter(function (x) { return !isNaN(x); });
-  // LSA is a running pool (leftover rolls forward) → one month-agnostic row
-  var month = channel === 'lsa' ? 'pool' : (p.month || currentMonth_());
   if (isNaN(labelCol) || !amountCols.length) {
     return { ok: false, error: 'pick a label column and a budget column first' };
   }
-  var sumCols = amountCols.length > 1;   // LSA: sum multiple month columns into one pool
 
   var src;
   try { src = SpreadsheetApp.openByUrl(url); }
@@ -652,57 +650,44 @@ function syncBudgets_(p) {
   var values = srcTab.getDataRange().getValues();
   if (values.length < 2) return { ok: false, error: 'tab "' + srcTab.getName() + '" has no rows' };
 
-  var parsed = [];
+  // Map each budget column to a MONTH — chronological, with the LAST column = the
+  // current month (append the newest month at the end). A single column is just the
+  // current month. This preserves each past month's billed instead of overwriting it.
+  // LSA additionally keeps a summed 'pool' row for its burn-down view.
+  var curMonth = p.month || currentMonth_();
+  var nCols = amountCols.length;
+  var colMonth = amountCols.map(function (_, i) { return monthOffset_(curMonth, -(nCols - 1 - i)); });
+
+  var byMonth = {};                     // month -> [{label, amount}]
+  colMonth.forEach(function (m) { byMonth[m] = []; });
+  var poolRows = [];                    // LSA only: sum across the listed months
   for (var r = 1; r < values.length; r++) {
     var label = String(values[r][labelCol] || '').trim();
     if (!label) continue;
-    var amt = 0, any = false;
+    var poolAmt = 0, anyPool = false;
     for (var ci = 0; ci < amountCols.length; ci++) {
       var v = parseNumber_(values[r][amountCols[ci]]);
-      if (v != null) { amt += v; any = true; }
+      if (v == null) continue;
+      byMonth[colMonth[ci]].push({ label: label, amount: v });
+      poolAmt += v; anyPool = true;
     }
-    if (!any) continue;
-    parsed.push({ label: label, amount: amt });
+    if (channel === 'lsa' && anyPool) poolRows.push({ label: label, amount: poolAmt });
   }
+  if (channel === 'lsa') byMonth['pool'] = poolRows;
 
-  // rebuild Budgets tab: keep everything except this month+platform, then add fresh.
-  // Capture existing amounts for this month+platform first, to detect changes.
-  var bt = ss.getSheetByName(TABS.budgets.name) || ss.insertSheet(TABS.budgets.name);
-  ensureHeader_(bt, TABS.budgets);
-  var bvals = bt.getDataRange().getValues();
-  var head = headIndex_(bvals[0]);
-  var existing = {};   // label(lower) -> amount
-  var keep = [TABS.budgets.header];
-  for (var i = 1; i < bvals.length; i++) {
-    var row = bvals[i];
-    if (row.every(function (c) { return c === '' || c === null; })) continue;
-    var sameMonth = String(row[head.Month]).trim() === month;
-    var samePlat  = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
-    if (sameMonth && samePlat) {
-      existing[String(row[head.Label]).trim().toLowerCase()] = Number(row[head['Total Budget']]) || 0;
-      continue; // will be replaced
-    }
-    keep.push(row);
-  }
-
-  // diff: only amount CHANGES to labels that already had a budget (not first-time adds)
+  // change detection: only for the CURRENT month (editing history shouldn't fire alerts)
+  var existing = readBudgetMonth_(ss, platform, curMonth);
   var changes = [];
-  parsed.forEach(function (x) {
+  (byMonth[curMonth] || []).forEach(function (x) {
     var k = x.label.toLowerCase();
     if (existing.hasOwnProperty(k) && Math.abs(existing[k] - x.amount) >= 0.01) {
       changes.push({ label: x.label, old: existing[k], now: x.amount });
     }
   });
 
-  var now = new Date();
-  parsed.forEach(function (x) { keep.push([x.label, platform, month, x.amount, now]); });
+  writeBudgetMonths_(ss, platform, byMonth);   // one rebuild, replacing every listed (platform, month) + LSA pool
 
-  bt.clearContents();
-  bt.getRange(1, 1, keep.length, TABS.budgets.header.length).setValues(keep);
-  forceText_(bt, TABS.budgets);
-
-  // record + notify on real changes
-  if (changes.length) logBudgetChanges_(ss, changes, platform, month, p.source || 'manual');
+  if (changes.length) logBudgetChanges_(ss, changes, platform, curMonth, p.source || 'manual');
 
   // remember the picks per channel (one batched write)
   var save = {
@@ -715,28 +700,37 @@ function syncBudgets_(p) {
   if (channel === 'lsa') save.lsaMonths = amountCols.length;
   setConfigMany_(save);
 
-  // LSA also gets a per-MONTH billed row for the current month (= the newest column
-  // in the list, since a new month's column is appended each month). This is what the
-  // exec view reads, so it shows what we billed for the month — not the running pool.
-  if (channel === 'lsa' && amountCols.length) {
-    var lastCol = amountCols[amountCols.length - 1];
-    var monthRows = [];
-    for (var mr = 1; mr < values.length; mr++) {
-      var mlab = String(values[mr][labelCol] || '').trim();
-      if (!mlab) continue;
-      var mv = parseNumber_(values[mr][lastCol]);
-      if (mv == null) continue;
-      monthRows.push({ label: mlab, amount: mv });
-    }
-    upsertBudgetMonth_(ss, 'LSA', currentMonth_(), monthRows);
-  }
-
-  return { ok: true, synced: parsed.length, month: month, platform: platform, channel: channel, changed: changes.length };
+  return { ok: true, synced: (byMonth[curMonth] || []).length, month: curMonth,
+           platform: platform, channel: channel, changed: changes.length, months: colMonth.length };
 }
 
-// Replace every (platform, month) row in the Budgets tab with the supplied rows,
-// leaving all other months/platforms (including the LSA 'pool' row) untouched.
-function upsertBudgetMonth_(ss, platform, month, rows) {
+// Shift a 'YYYY-MM' month string by delta months.
+function monthOffset_(ym, delta) {
+  var p = ym.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1 + delta, 1);
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM');
+}
+
+// Existing budget amounts for one (platform, month): label(lower) -> amount.
+function readBudgetMonth_(ss, platform, month) {
+  var out = {};
+  var bt = ss.getSheetByName(TABS.budgets.name);
+  if (!bt) return out;
+  var v = bt.getDataRange().getValues();
+  if (v.length < 2) return out;
+  var h = headIndex_(v[0]);
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][h.Platform]).trim().toLowerCase() === platform.toLowerCase() &&
+        String(v[i][h.Month]).trim() === month) {
+      out[String(v[i][h.Label]).trim().toLowerCase()] = Number(v[i][h['Total Budget']]) || 0;
+    }
+  }
+  return out;
+}
+
+// Rebuild the Budgets tab, replacing every (platform, month) row for the months that
+// appear as keys in byMonth (including 'pool'); all other rows are left untouched.
+function writeBudgetMonths_(ss, platform, byMonth) {
   var bt = ss.getSheetByName(TABS.budgets.name) || ss.insertSheet(TABS.budgets.name);
   ensureHeader_(bt, TABS.budgets);
   var bvals = bt.getDataRange().getValues();
@@ -745,13 +739,15 @@ function upsertBudgetMonth_(ss, platform, month, rows) {
   for (var i = 1; i < bvals.length; i++) {
     var row = bvals[i];
     if (row.every(function (c) { return c === '' || c === null; })) continue;
-    var sameM = String(row[head.Month]).trim() === month;
-    var sameP = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
-    if (sameM && sameP) continue;   // drop → replaced below
+    var samePlat = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
+    var m = String(row[head.Month]).trim();
+    if (samePlat && byMonth.hasOwnProperty(m)) continue;   // replaced below
     keep.push(row);
   }
   var now = new Date();
-  rows.forEach(function (r) { keep.push([r.label, platform, month, r.amount, now]); });
+  Object.keys(byMonth).forEach(function (m) {
+    byMonth[m].forEach(function (x) { keep.push([x.label, platform, m, x.amount, now]); });
+  });
   bt.clearContents();
   bt.getRange(1, 1, keep.length, TABS.budgets.header.length).setValues(keep);
   forceText_(bt, TABS.budgets);

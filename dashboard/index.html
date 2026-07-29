@@ -253,8 +253,8 @@
         <input id="setLabelColL" placeholder="A" style="max-width:80px;text-transform:uppercase" oninput="previewCol('label','setLabelColL','labelColInfo')">
         <span id="labelColInfo" class="muted" style="font-size:12px"></span>
       </div>
-      <div class="settings-row"><label>Google budget col</label>
-        <input id="setGoogleColL" placeholder="e.g. G" style="max-width:80px;text-transform:uppercase" oninput="previewCol('g','setGoogleColL','gColInfo')">
+      <div class="settings-row"><label>Google budget col(s)</label>
+        <input id="setGoogleColL" placeholder="e.g. G — or P,Q,R (newest last)" style="max-width:200px;text-transform:uppercase" oninput="previewCol('g','setGoogleColL','gColInfo')">
         <span id="gColInfo" class="muted" style="font-size:12px;flex:1"></span>
         <button onclick="syncChannel('google')">Sync</button>
       </div>
@@ -263,8 +263,8 @@
         <span id="lColInfo" class="muted" style="font-size:12px;flex:1"></span>
         <button onclick="syncChannel('lsa')">Sync</button>
       </div>
-      <div class="settings-row"><label>Meta budget col</label>
-        <input id="setMetaColL" placeholder="e.g. R" style="max-width:80px;text-transform:uppercase" oninput="previewCol('m','setMetaColL','mColInfo')">
+      <div class="settings-row"><label>Meta budget col(s)</label>
+        <input id="setMetaColL" placeholder="e.g. R — or S,T,U (newest last)" style="max-width:200px;text-transform:uppercase" oninput="previewCol('m','setMetaColL','mColInfo')">
         <span id="mColInfo" class="muted" style="font-size:12px;flex:1"></span>
         <button onclick="syncChannel('meta')">Sync</button>
       </div>
@@ -273,7 +273,7 @@
         <span id="syncMsg" class="muted"></span>
       </div>
     </div>
-    <div class="hint">One account column (e.g. <b>A</b>), then the budget column for each channel by letter. <b>LSA takes a comma-separated list</b> (e.g. <b>M,N,O</b>) — the tool sums those months into one running pool and paces the leftover forward. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Each month, add the new month's letter (Google/Meta swap it, LSA append it). Share the sheet with the account that runs the gateway.</div>
+    <div class="hint">One account column (e.g. <b>A</b>), then the budget column(s) for each channel. Any channel can take a <b>comma-separated list of month columns</b> (e.g. <b>P,Q,R</b>) — <b>newest month last</b>; each column is stored as that month's billed, so the Overview keeps full month-by-month history. A single letter = just the current month. LSA additionally sums its months into a running pool for burn-down pacing. Each month, <b>append the new month's column</b> (don't overwrite) so history is preserved. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Share the sheet with the account that runs the gateway.</div>
 
     <h3 style="margin:14px 0 4px">Meta / Facebook import</h3>
     <div class="hint">Pulls daily Meta spend + metrics from your DataSlayer sheet into the tool. Franchise = the <b>Campaign tag</b> — campaigns with no tag are ignored (they show as inactive). Share the DataSlayer sheet with the account that runs the gateway. Auto-syncs once a day; hit Sync any time you refresh the data.</div>
@@ -415,8 +415,8 @@ function execData(targetMonth){
       const bill=billed[b]||0, target=bill*fee1, fees=bill-target, sm=spendM[b]||0, sy=spendY[b]||0;
       const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;
       return {name:b, billed:bill, target, fees, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
-    }).filter(a=> isCurrent ? a.billed>0 : a.spendM>0)   // current month: billed accounts; past months: accounts that spent
-      .sort((a,b)=> (isCurrent ? b.billed-a.billed : b.spendM-a.spendM) || a.name.localeCompare(b.name));
+    }).filter(a=> a.billed>0 || (!isCurrent && a.spendM>0))   // current: billed accounts; past: billed or spent
+      .sort((a,b)=> b.billed-a.billed || b.spendM-a.spendM || a.name.localeCompare(b.name));
     const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,fees:a.fees+x.fees,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
     tot.pacing = tot.target>0 ? tot.projected/tot.target-1 : null;
     return {key:ch.key, label:ch.label, accounts, tot};
