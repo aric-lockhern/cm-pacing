@@ -24,7 +24,9 @@
 var SPREADSHEET_URL    = 'https://docs.google.com/spreadsheets/d/16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE/edit';
 var ACCOUNT_LABEL      = 'Active';
 var UNLABELED_FALLBACK = 'account';   // 'account' or 'campaign'
-var LOOKBACK_DAYS      = 90;
+var LOOKBACK_DAYS      = 90;      // rolling window — used only when YEAR_TO_DATE is false
+var YEAR_TO_DATE       = true;    // true = pull Jan 1 (this year) → yesterday, so the exec view has the full year
+var CAMPAIGN_DAILY_DAYS= 90;      // the per-campaign tab stays this short even in YTD mode (keeps the app's deep-dive fast)
 var IGNORE_LABELS      = ['Active', 'Paused', 'DoNotTouch'];
 var ACCOUNT_ALIASES    = { /* 'Waxing - 1812 Marketing': 'Waxing', */ };
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -44,6 +46,11 @@ function main() {
 
   var range = dateRange_(LOOKBACK_DAYS);
   var monthPrefix = todayYmd_().substring(0, 6);
+  // Per-campaign daily rows are capped to this cutoff (yyyymmdd) even in YTD mode.
+  var campCut = (function () {
+    var d = new Date(); d.setDate(d.getDate() - CAMPAIGN_DAILY_DAYS);
+    return Utilities.formatDate(d, AdsApp.currentAccount().getTimeZone(), 'yyyyMMdd');
+  })();
 
   var daily = {}, mtd = {}, camp = {}, enabled = {}, allFr = {}, budgets = {};
   var acctCount = 0, totalCampaigns = 0;
@@ -149,7 +156,7 @@ function main() {
       info.fr.forEach(function (f) {
         addTo_(bucket2_(daily, dYmd, f), vals);
         if (inMonth) addTo_(bucket1_(mtd, f), vals);
-        addTo_(bucket3_(camp, f, info.name, dYmd), vals);
+        if (dYmd >= campCut) addTo_(bucket3_(camp, f, info.name, dYmd), vals);   // per-campaign kept short
       });
     }
 
@@ -227,11 +234,14 @@ function writeCamp_(ss, camp) {
 
 function ensureTab_(ss, name) { var t = ss.getSheetByName(name); if (!t) t = ss.insertSheet(name); return t; }
 function dash_(d) { return d.substring(0, 4) + '-' + d.substring(4, 6) + '-' + d.substring(6, 8); }
-// Window ENDS YESTERDAY — today is still in progress and its partial numbers
-// would understate spend and distort pacing.
+// Window ENDS YESTERDAY — today is still in progress and its partial numbers would
+// understate spend and distort pacing. With YEAR_TO_DATE it STARTS Jan 1 of the
+// current year (full YTD for the exec view); otherwise it's a rolling LOOKBACK_DAYS.
 function dateRange_(days) {
   var e = new Date(); e.setDate(e.getDate() - 1);
-  var s = new Date(e); s.setDate(s.getDate() - (days - 1));
+  var s;
+  if (YEAR_TO_DATE) { s = new Date(e.getFullYear(), 0, 1); }
+  else { s = new Date(e); s.setDate(s.getDate() - (days - 1)); }
   return { startDash: ymdDash_(s), endDash: ymdDash_(e) };
 }
 function ymdDash_(d) { return Utilities.formatDate(d, AdsApp.currentAccount().getTimeZone(), 'yyyy-MM-dd'); }

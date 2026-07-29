@@ -33,7 +33,7 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 
 | Path | What it is |
 |------|-----------|
-| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). |
+| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Exec** tab — an all-channel summary rolled up to Account/brand, month + YTD, with a spend chart. |
 | `apps-script/sheet_gateway.gs` | Apps Script **web app** — the JSONP gateway, Slack poster, and budget sync. |
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |

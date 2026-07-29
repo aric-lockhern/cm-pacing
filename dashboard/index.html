@@ -118,6 +118,16 @@
   .settings-row input{flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 9px}
   .hint{font-size:12px;color:var(--faint);margin:2px 0 12px}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
+
+  /* exec view */
+  .exec-sec{margin:18px 0}
+  .exec-cap{font-weight:700;font-size:14px;margin:0 2px 6px;color:var(--ink)}
+  .exec-tot td{font-weight:700;border-top:2px solid var(--line)}
+  .exec-top td{font-weight:800;background:var(--panel2);font-size:15px}
+  .exec-chartcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 14px 10px;margin:6px 0 10px}
+  .exec-chart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .exec-chart-head b{font-size:14px}
+  #execCanvas{height:240px;margin-top:0}
 </style>
 </head>
 <body>
@@ -127,6 +137,7 @@
     <button data-ch="google" onclick="setChannel('google')">Google Ads</button>
     <button data-ch="lsa" onclick="setChannel('lsa')">LSA</button>
     <button data-ch="meta" onclick="setChannel('meta')">Meta</button>
+    <button data-ch="exec" onclick="showExec()" title="Executive summary: total spend by channel and account, month + YTD">Exec</button>
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
@@ -141,7 +152,7 @@
   <div id="budgetBanner"></div>
   <div id="alerts" class="alerts"></div>
 
-  <div class="toolbar">
+  <div class="toolbar" id="mainToolbar">
     <input id="search" placeholder="Filter franchises…" oninput="render()">
     <div class="seg" id="viewSeg">
       <button data-v="active" class="on" onclick="setView('active')">Active</button>
@@ -175,6 +186,8 @@
     <tbody id="rows"></tbody>
   </table>
   <div id="emptyState" class="empty" style="display:none"></div>
+
+  <div id="execView" style="display:none"></div>
 </main>
 
 <!-- deep dive -->
@@ -303,10 +316,159 @@ let CFG = { googleFee:0.25, metaFee:0.20, budgetSheetUrl:'' };
 let MARKUP = localStorage.getItem('pace_markup')==='1';
 let CHANNEL = localStorage.getItem('pace_channel') || 'google';
 function setChannel(ch){
-  if(CHANNEL===ch) return;
+  const wasExec = EXEC;
+  EXEC = false; localStorage.setItem('pace_exec','0');
+  if(CHANNEL===ch && !wasExec) return;
   CHANNEL = ch; localStorage.setItem('pace_channel', ch);
   closeDD();
+  document.getElementById('execView').style.display = 'none';
+  showMain(true);
   if(DATA){ build(); render(); if(ch==='google') setTimeout(()=>prefetchCampaigns(), 30); }
+}
+
+/* ── executive summary (all channels, rolled up to Account/brand) ─────────── */
+let EXEC = localStorage.getItem('pace_exec')==='1';
+let EXEC_DATA = null;
+let EXEC_CHART_MODE = 'time';
+// Elements that make up the normal (per-channel) view, hidden while Exec is open.
+const MAIN_ELS = ['totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
+function showMain(on){ MAIN_ELS.forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = on?'':'none'; }); }
+
+// Account (brand) = the part before " - " in a franchise label, with a couple of
+// canonical-name fixes. Edit BRAND_ALIASES if the execs want a name shown differently.
+const BRAND_ALIASES = { 'scf':'Steel Coated Floors', 'steel coated floors':'Steel Coated Floors', 'waxing':'Waxing The City', 'waxing the city':'Waxing The City' };
+function brandOf(label){
+  const raw = String(label||'').split(' - ')[0].trim();
+  return BRAND_ALIASES[raw.toLowerCase()] || raw || '—';
+}
+
+function showExec(){
+  EXEC = true; localStorage.setItem('pace_exec','1'); closeDD();
+  showMain(false);
+  document.getElementById('execView').style.display = 'block';
+  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.toggle('on', b.dataset.ch==='exec'));
+  document.getElementById('monthLabel').textContent = `YTD ${now.getFullYear()} · month ${MONTH}`;
+  if(DATA) renderExec();
+}
+
+function execData(){
+  const CHS = [
+    {key:'google', label:'Google Ads',        fee:Number(CFG.googleFee)||0, platform:'Google', month:MONTH,  daily:DATA.dailyG||[]},
+    {key:'lsa',    label:'Local Service Ads',  fee:Number(CFG.lsaFee)||0,    platform:'LSA',    month:'pool', daily:DATA.dailyLsa||[]},
+    {key:'meta',   label:'Facebook',           fee:Number(CFG.metaFee)||0,   platform:'Meta',   month:MONTH,  daily:DATA.metaDaily||[]}
+  ];
+  const asof = isoLocal(ASOF), yr = String(now.getFullYear());
+  const monthly = {};   // 'YYYY-MM' -> {google,lsa,meta}
+  const channels = CHS.map(ch=>{
+    const billed = {};
+    (DATA.budgets||[]).forEach(r=>{
+      if(key(r.Platform)!==key(ch.platform)) return;
+      if(String(r.Month).trim()!==ch.month) return;
+      const b = brandOf(r.Label);
+      billed[b] = (billed[b]||0) + (Number(r['Total Budget'])||0);
+    });
+    const spendM = {}, spendY = {};
+    (ch.daily).forEach(r=>{
+      const d = String(r.Date).slice(0,10); if(!d || d>asof) return;
+      const b = brandOf(r.Label), sp = Number(r.Spend)||0;
+      if(d.slice(0,4)===yr){
+        spendY[b]=(spendY[b]||0)+sp;
+        const mk=d.slice(0,7); (monthly[mk]=monthly[mk]||{google:0,lsa:0,meta:0})[ch.key]+=sp;
+      }
+      if(d.slice(0,7)===MONTH) spendM[b]=(spendM[b]||0)+sp;
+    });
+    const fee1 = 1-ch.fee;
+    const names = new Set([...Object.keys(billed), ...Object.keys(spendM), ...Object.keys(spendY)]);
+    const accounts = [...names].map(b=>{
+      const bill=billed[b]||0, target=bill*fee1, sm=spendM[b]||0, sy=spendY[b]||0;
+      const projected = ELAPSED_FRAC>0 ? sm/ELAPSED_FRAC : 0;
+      return {name:b, billed:bill, target, spendM:sm, spendYTD:sy, projected, pacing: target>0 ? projected/target-1 : null};
+    }).sort((a,b)=> b.spendM-a.spendM || a.name.localeCompare(b.name));
+    const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
+    tot.pacing = tot.target>0 ? tot.projected/tot.target-1 : null;
+    return {key:ch.key, label:ch.label, accounts, tot};
+  });
+  const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,spendM:0,spendYTD:0,projected:0});
+  return {channels, top, monthly};
+}
+
+function usd(n){ n=Math.round(Number(n)||0); return (n<0?'-$':'$')+Math.abs(n).toLocaleString(); }
+function pacingCell(p){ if(p==null) return '<span class="muted">—</span>';
+  const c = p>0.05?'neg':(p<-0.05?'mid':'pos'); return `<span class="pace ${c}">${(p>=0?'+':'')+Math.round(p*100)}%</span>`; }
+
+function renderExec(){
+  const ed = EXEC_DATA = execData();
+  const sections = ed.channels.map(ch=>{
+    const rows = ch.accounts.map(a=>
+      `<tr><td>${esc(a.name)}</td><td>${usd(a.billed)}</td><td>${usd(a.target)}</td><td><b>${usd(a.spendM)}</b></td><td>${usd(a.spendYTD)}</td><td>${usd(a.projected)}</td><td>${pacingCell(a.pacing)}</td></tr>`
+    ).join('');
+    const t = ch.tot;
+    return `<div class="exec-sec"><div class="exec-cap">${esc(ch.label)}</div>
+      <table><thead><tr>
+        <th>Account</th><th>Total Billed</th><th>Ad Spend Target</th><th>MTD Spend</th><th>YTD Spend</th><th>Projected</th><th>Pacing</th>
+      </tr></thead><tbody>
+        ${rows || '<tr><td colspan="7" class="muted">No data yet</td></tr>'}
+        <tr class="exec-tot"><td>Total</td><td>${usd(t.billed)}</td><td>${usd(t.target)}</td><td>${usd(t.spendM)}</td><td>${usd(t.spendYTD)}</td><td>${usd(t.projected)}</td><td>${pacingCell(t.pacing)}</td></tr>
+      </tbody></table></div>`;
+  }).join('');
+  const top = ed.top;
+  const topline = `<div class="exec-sec"><table><thead><tr>
+      <th>Top Line — all channels</th><th>Total Billed</th><th>Ad Spend Target</th><th>MTD Spend</th><th>YTD Spend</th><th>Projected</th><th></th></tr></thead>
+    <tbody><tr class="exec-top"><td>All channels</td><td>${usd(top.billed)}</td><td>${usd(top.target)}</td><td>${usd(top.spendM)}</td><td>${usd(top.spendYTD)}</td><td>${usd(top.projected)}</td><td></td></tr></tbody></table></div>`;
+  document.getElementById('execView').innerHTML = `
+    <div class="integrity-note">Executive summary · YTD ${now.getFullYear()} · month ${MONTH} · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}. Spend = raw platform spend; Billed = client budget; Ad Spend Target = billed × (1 − fee).</div>
+    <div class="exec-chartcard">
+      <div class="exec-chart-head"><b>Total spend</b>
+        <div class="seg" id="execChartSeg">
+          <button data-m="time" class="${EXEC_CHART_MODE==='time'?'on':''}" onclick="setExecChart('time')">Over time</button>
+          <button data-m="account" class="${EXEC_CHART_MODE==='account'?'on':''}" onclick="setExecChart('account')">By account (YTD)</button>
+        </div>
+      </div>
+      <canvas id="execCanvas" width="1000" height="240"></canvas>
+    </div>
+    ${sections}${topline}`;
+  drawExecChart();
+}
+
+function setExecChart(m){ EXEC_CHART_MODE=m;
+  document.querySelectorAll('#execChartSeg button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+  drawExecChart(); }
+
+function execMoneyShort(n){ n=Math.round(n); return n>=1000 ? '$'+(n/1000).toFixed(n>=10000?0:1)+'k' : '$'+n; }
+function drawExecChart(){
+  const ed = EXEC_DATA; const cv=document.getElementById('execCanvas'); if(!ed||!cv) return;
+  const ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const COL={google:'#f26722',lsa:'#1f9d5b',meta:'#3b6fb0'}, KEYS=['google','lsa','meta'], KLAB={google:'Google',lsa:'LSA',meta:'Meta'};
+  let cats=[], dataFn, labelFn;
+  if(EXEC_CHART_MODE==='time'){
+    cats = Object.keys(ed.monthly).sort();
+    dataFn = (c,k)=> ed.monthly[c][k]||0;
+    labelFn = c=> monthLabel(c);
+  } else {
+    const acc={};
+    ed.channels.forEach(ch=> ch.accounts.forEach(a=>{ (acc[a.name]=acc[a.name]||{google:0,lsa:0,meta:0})[ch.key]+=a.spendYTD; }));
+    cats = Object.keys(acc).sort((a,b)=> (acc[b].google+acc[b].lsa+acc[b].meta)-(acc[a].google+acc[a].lsa+acc[a].meta)).slice(0,12);
+    dataFn = (c,k)=> acc[c][k]||0;
+    labelFn = c=> c.length>11 ? c.slice(0,11)+'…' : c;
+  }
+  const padL=52,padT=14,padB=40,padR=12;
+  const totals=cats.map(c=> KEYS.reduce((s,k)=>s+dataFn(c,k),0));
+  const maxV=Math.max(...totals,1)*1.15;
+  const plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
+  const n=Math.max(cats.length,1), step=plotW/n, bw=Math.min(56, step*0.6);
+  const y=v=> base-(v/maxV)*plotH;
+  ctx.textAlign='right'; ctx.font='10px sans-serif';
+  [0,0.5,1].forEach(t=>{ const v=(maxV/1.15)*t, yy=y(v);
+    ctx.strokeStyle='#e4e4ea'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#9a99a6'; ctx.fillText(execMoneyShort(v), padL-6, yy+3); });
+  cats.forEach((c,i)=>{
+    const cx=padL+step*i+step/2; let yb=base;
+    KEYS.forEach(k=>{ const v=dataFn(c,k); if(v<=0) return; const h=(v/maxV)*plotH; ctx.fillStyle=COL[k]; ctx.fillRect(cx-bw/2, yb-h, bw, h); yb-=h; });
+    if(i % Math.ceil(n/14) === 0 || i===n-1){ ctx.fillStyle='#6c6b78'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(labelFn(c), cx, H-20); }
+  });
+  let lx=padL;
+  KEYS.forEach(k=>{ ctx.fillStyle=COL[k]; ctx.fillRect(lx, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.font='11px sans-serif'; ctx.textAlign='left'; ctx.fillText(KLAB[k], lx+14, H-3); lx+=72; });
 }
 // Gross-up factor: turns ad spend into what the client is billed.
 // Uses each account's own budget split (gross ÷ ad-spend target), so a mixed
@@ -360,7 +522,8 @@ async function load(fresh){
     build();
     setStatus('live','Live');
     render();
-    if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
+    if(EXEC) showExec();                                              // re-render exec with fresh data
+    else if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
   }catch(e){
     setStatus('err','Offline — check Settings');
     console.error(e);
