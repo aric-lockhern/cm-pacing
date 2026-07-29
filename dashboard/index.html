@@ -423,7 +423,19 @@ function execData(targetMonth){
   });
   const top = channels.reduce((a,c)=>({billed:a.billed+c.tot.billed,target:a.target+c.tot.target,fees:a.fees+c.tot.fees,spendM:a.spendM+c.tot.spendM,spendYTD:a.spendYTD+c.tot.spendYTD,projected:a.projected+c.tot.projected}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0});
   top.pacing = top.target>0 ? top.projected/top.target-1 : null;
-  return {channels, top, monthly, month:targetMonth, isCurrent};
+  // per-month billed (all channels) vs spent, for the compare chart
+  const monthlyBilled = {};
+  (DATA.budgets||[]).forEach(r=>{
+    const m = String(r.Month).trim();
+    if(!/^\d{4}-\d{2}$/.test(m) || m.slice(0,4)!==yr) return;   // skip 'pool' / other years
+    monthlyBilled[m] = (monthlyBilled[m]||0) + (Number(r['Total Budget'])||0);
+  });
+  const monthlyCompare = {};
+  new Set([...Object.keys(monthly), ...Object.keys(monthlyBilled)]).forEach(m=>{
+    const s = monthly[m] ? (monthly[m].google+monthly[m].lsa+monthly[m].meta) : 0;
+    monthlyCompare[m] = { billed: monthlyBilled[m]||0, spent: s };
+  });
+  return {channels, top, monthly, monthlyCompare, month:targetMonth, isCurrent};
 }
 
 function usd(n){ n=Math.round(Number(n)||0); return (n<0?'-$':'$')+Math.abs(n).toLocaleString(); }
@@ -463,16 +475,18 @@ function renderExec(){
       <select id="execMonthSel" onchange="setExecMonth(this.value)">${monthOpts}</select>
       <span class="muted" style="font-size:12px">Billed = what we invoiced · Fees = our margin · ${projHdr} = ${ed.isCurrent?'forecast':'final'} ad spend · Pacing = projected vs ad-spend target${ed.isCurrent?'':' · billed/fees only where a budget was saved that month'} · as of ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>
     </div>
+    ${topline}
     <div class="exec-chartcard">
       <div class="exec-chart-head"><b>Total spend</b>
         <div class="seg" id="execChartSeg">
           <button data-m="time" class="${EXEC_CHART_MODE==='time'?'on':''}" onclick="setExecChart('time')">Over time (YTD)</button>
+          <button data-m="compare" class="${EXEC_CHART_MODE==='compare'?'on':''}" onclick="setExecChart('compare')">Billed vs spent</button>
           <button data-m="account" class="${EXEC_CHART_MODE==='account'?'on':''}" onclick="setExecChart('account')">By account</button>
         </div>
       </div>
       <canvas id="execCanvas"></canvas>
     </div>
-    ${sections}${topline}`;
+    ${sections}`;
   drawExecChart();
 }
 
@@ -493,6 +507,7 @@ function drawExecChart(){
   const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
   const W=cssW, H=cssH;
   ctx.clearRect(0,0,W,H);
+  if(EXEC_CHART_MODE==='compare'){ drawExecCompare(ctx, W, H, ed); return; }
   const COL={google:'#f26722',lsa:'#1f9d5b',meta:'#3b6fb0'}, KEYS=['google','lsa','meta'], KLAB={google:'Google',lsa:'LSA',meta:'Meta'};
   let cats=[], dataFn, labelFn;
   if(EXEC_CHART_MODE==='time'){
@@ -523,6 +538,32 @@ function drawExecChart(){
   });
   let lx=padL;
   KEYS.forEach(k=>{ ctx.fillStyle=COL[k]; ctx.fillRect(lx, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.font='11px sans-serif'; ctx.textAlign='left'; ctx.fillText(KLAB[k], lx+14, H-3); lx+=72; });
+}
+// Grouped bars per month: Billed (gross invoiced) vs Spent (raw ad spend), all channels.
+function drawExecCompare(ctx, W, H, ed){
+  const cats = Object.keys(ed.monthlyCompare).sort();
+  const billed = cats.map(m=> ed.monthlyCompare[m].billed);
+  const spent  = cats.map(m=> ed.monthlyCompare[m].spent);
+  const padL=52,padT=14,padB=40,padR=12;
+  const maxV=Math.max(...billed, ...spent, 1)*1.15;
+  const plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
+  const n=Math.max(cats.length,1), step=plotW/n;
+  const bw=Math.min(26, (step*0.7)/2 - 1);
+  const y=v=> base-(v/maxV)*plotH;
+  ctx.textAlign='right'; ctx.font='10px sans-serif';
+  [0,0.5,1].forEach(t=>{ const v=(maxV/1.15)*t, yy=y(v);
+    ctx.strokeStyle='#e4e4ea'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#9a99a6'; ctx.fillText(execMoneyShort(v), padL-6, yy+3); });
+  const CB='#8f8fa6', CS='#f26722';   // billed = slate, spent = accent
+  cats.forEach((m,i)=>{
+    const cx=padL+step*i+step/2;
+    ctx.fillStyle=CB; ctx.fillRect(cx-bw-1, y(billed[i]), bw, Math.max(base-y(billed[i]),0));
+    ctx.fillStyle=CS; ctx.fillRect(cx+1,    y(spent[i]),  bw, Math.max(base-y(spent[i]),0));
+    if(i % Math.ceil(n/14) === 0 || i===n-1){ ctx.fillStyle='#6c6b78'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(monthLabel(m), cx, H-20); }
+  });
+  ctx.textAlign='left'; ctx.font='11px sans-serif';
+  ctx.fillStyle=CB; ctx.fillRect(padL, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText('Billed', padL+14, H-3);
+  ctx.fillStyle=CS; ctx.fillRect(padL+72, H-12, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText('Spent', padL+86, H-3);
 }
 window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('execCanvas')) drawExecChart(); });
 // Gross-up factor: turns ad spend into what the client is billed.
