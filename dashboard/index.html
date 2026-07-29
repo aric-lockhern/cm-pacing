@@ -648,7 +648,7 @@ const key = s => String(s||'').trim().toLowerCase();
 // which channel's data + rules to use
 function channelCfg(){
   if(CHANNEL==='lsa')  return { platform:'LSA',    fee:Number(CFG.lsaFee)||0,  mode:'burndown', budgetMonth:'pool', feedRows:DATA.lsa||[], dailyRows:DATA.dailyLsa||[], dailyCols:['Spend',null,'Conv',null], hasBudgets:true };
-  if(CHANNEL==='meta') return { platform:'Meta',   fee:Number(CFG.metaFee)||0, mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.metaFeed||[], dailyRows:DATA.metaDaily||[], dailyCols:['Spend','Clicks','Leads/Conv','Revenue'], hasBudgets:true, campaignCol:'Campaign' };
+  if(CHANNEL==='meta') return { platform:'Meta',   fee:Number(CFG.metaFee)||0, mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.metaFeed||[], dailyRows:DATA.metaDaily||[], dailyCols:['Spend','Clicks','Leads/Conv','Revenue'], hasBudgets:true, campaignCol:'Campaign', strictStatus:true };
   return                      { platform:'Google', fee:Number(CFG.googleFee)||0,mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.google||[],dailyRows:DATA.dailyG||[],    dailyCols:['Spend','Clicks','Conv','Revenue'], hasBudgets:true };
 }
 
@@ -718,10 +718,13 @@ function build(){
     const gross = bud[k] || 0;
     const adTarget = gross * fee1;
     const feeAmt = gross - adTarget;
+    const hasFeed = feed.hasOwnProperty(k);
     const f = feed[k] || {status:'', dailyBudget:0};
     const type = (meta.Type||'').toLowerCase()==='e-comm' ? 'e-comm' : 'lead-gen';
     const hidden = String(meta.Hidden||'').toLowerCase()==='true' || meta.Hidden===true;
-    const live = f.status !== 'paused';
+    // In the feed → status-driven. Not in the feed → paused only when strictStatus is on
+    // AND the feed actually has rows (so an empty/not-yet-synced feed doesn't pause everyone).
+    const live = hasFeed ? (f.status !== 'paused') : ((CH.strictStatus && CH.feedRows.length) ? false : true);
 
     let spend, conv, rev, expectedToDate, projected, reqDaily, dailyTarget, pace, runRate=0;
 

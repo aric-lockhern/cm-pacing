@@ -590,15 +590,23 @@ function syncMeta_(p) {
   mt.getRange(1, 1, body.length, TABS.metaDaily.header.length).setValues(body);
   forceText_(mt, TABS.metaDaily);
 
-  // Meta feed = the LATEST day's per-franchise daily budget (active campaigns only) + status.
+  // Meta feed = each franchise's status/daily-budget from the last few days of data.
+  // A franchise is active if any of its campaigns is ACTIVE in that window; daily budget
+  // = its active campaigns' budget on its most recent active day. Franchises with no rows
+  // in the window aren't written, so the app treats them as not running (paused).
   var feedRows = [], now = new Date();
-  var dates = Object.keys(feedByDate);
-  if (dates.length) {
-    var fmap = feedByDate[dates.sort()[dates.length - 1]];
-    Object.keys(fmap).sort().forEach(function (tg) {
-      feedRows.push([tg, round2_(fmap[tg].budget), fmap[tg].active ? 'active' : 'paused', now]);
+  var recent = Object.keys(feedByDate).sort().slice(-3);   // last 3 days present in the data
+  var feedAgg = {};                                        // tag -> { budget, active, day }
+  recent.forEach(function (d) {
+    var fmap = feedByDate[d];
+    Object.keys(fmap).forEach(function (tg) {
+      var cur = feedAgg[tg] = feedAgg[tg] || { budget: 0, active: false, day: '' };
+      if (fmap[tg].active) { cur.active = true; if (d >= cur.day) { cur.budget = fmap[tg].budget; cur.day = d; } }
     });
-  }
+  });
+  Object.keys(feedAgg).sort().forEach(function (tg) {
+    feedRows.push([tg, round2_(feedAgg[tg].budget), feedAgg[tg].active ? 'active' : 'paused', now]);
+  });
   var mf = ss.getSheetByName(TABS.metaFeed.name) || ss.insertSheet(TABS.metaFeed.name);
   mf.clearContents();
   var fbody = [TABS.metaFeed.header].concat(feedRows);
