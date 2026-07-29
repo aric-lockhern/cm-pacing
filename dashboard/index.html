@@ -353,6 +353,8 @@ function showMain(on){ MAIN_ELS.forEach(id=>{ const el=document.getElementById(i
 // Account (brand) = the part before " - " in a franchise label, with a couple of
 // canonical-name fixes. Edit BRAND_ALIASES if the execs want a name shown differently.
 const BRAND_ALIASES = { 'scf':'Steel Coated Floors', 'steel coated floors':'Steel Coated Floors', 'waxing':'Waxing The City', 'waxing the city':'Waxing The City' };
+// Header-row artifacts from the billing sheet that must never appear as a franchise/account.
+const IGNORE_FRANCHISES = new Set(['location name', 'total', '']);
 function brandOf(label){
   const raw = String(label||'').split(' - ')[0].trim();
   return BRAND_ALIASES[raw.toLowerCase()] || raw || '—';
@@ -416,7 +418,7 @@ function execData(targetMonth){
       const projected = elapsedFrac>0 ? sm/elapsedFrac : 0;   // raw ad spend (final for past months)
       const spendFee = fee1>0 ? projected/fee1 : projected;   // grossed up by fee = billed-equivalent of actual spend
       return {name:b, billed:bill, target, fees, spendM:sm, spendYTD:sy, projected, spendFee, pacing: target>0 ? projected/target-1 : null};
-    }).filter(a=> a.billed>0 || (!isCurrent && a.spendM>0))   // current: billed accounts; past: billed or spent
+    }).filter(a=> !IGNORE_FRANCHISES.has(a.name.toLowerCase()) && (a.billed>0 || (!isCurrent && a.spendM>0)))   // skip artifacts; current: billed, past: billed or spent
       .sort((a,b)=> b.billed-a.billed || b.spendM-a.spendM || a.name.localeCompare(b.name));
     const tot = accounts.reduce((a,x)=>({billed:a.billed+x.billed,target:a.target+x.target,fees:a.fees+x.fees,spendM:a.spendM+x.spendM,spendYTD:a.spendYTD+x.spendYTD,projected:a.projected+x.projected,spendFee:a.spendFee+x.spendFee}),{billed:0,target:0,fees:0,spendM:0,spendYTD:0,projected:0,spendFee:0});
     tot.pacing = tot.target>0 ? tot.projected/tot.target-1 : null;
@@ -709,6 +711,7 @@ function build(){
 
   MODEL = [];
   labels.forEach(k=>{
+    if(IGNORE_FRANCHISES.has(k)) return;   // drop billing-sheet header artifacts
     const meta = G[k] && G[k][0] || {};
     const disp = bud['__disp__'+k] || meta.Label || feedName(CH,k) || titleize(k);
     const series = dailyByLabel[k] || {};
