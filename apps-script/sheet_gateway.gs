@@ -25,6 +25,7 @@ var TABS = {
   lsa:        { name: 'LSA_Feed',      header: ['Label','Spend','Conv','Status','Updated'] },
   dailyLsa:   { name: 'Daily_LSA',     header: ['Date','Label','Spend','Conv'] },
   metaDaily:  { name: 'Meta_Daily',    header: ['Date','Label','Campaign','Spend','Impressions','Clicks','Leads/Conv','Revenue'] },
+  metaFeed:   { name: 'Meta_Feed',     header: ['Label','DailyBudget','Status','Updated'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   groups:     { name: 'Groups',        header: ['Label','Group','Hidden','Type','Manager','Updated'] },
@@ -216,6 +217,7 @@ function getDataString_(force) {
     lsa:        readTab_(ss, TABS.lsa),
     dailyLsa:   readTab_(ss, TABS.dailyLsa),
     metaDaily:  readTab_(ss, TABS.metaDaily),
+    metaFeed:   readTab_(ss, TABS.metaFeed),
     budgets:    readTab_(ss, TABS.budgets),
     budgetLog:  readTab_(ss, TABS.budgetLog),
     groups:     readTab_(ss, TABS.groups),
@@ -482,7 +484,9 @@ function metaColMap_(H) {
     impr:     pick(['Impressions', 'Impr']),
     clicks:   pick(['Clicks', 'Link clicks']),
     webConv:  pick(['Website conversions', 'Web conversions', 'Website Conversions']),
-    fbLeads:  pick(['On Facebook Leads', 'On-Facebook Leads', 'Facebook Leads', 'Leads'])
+    fbLeads:  pick(['On Facebook Leads', 'On-Facebook Leads', 'Facebook Leads', 'Leads']),
+    dailyBudget: pick(['Daily budget', 'Daily Budget', 'Budget']),         // optional
+    status:      pick(['Campaign status', 'Status', 'Effective status'])   // optional
   };
   var missing = [];
   ['date', 'tag', 'campaign', 'spend'].forEach(function (k) { if (map[k] < 0) missing.push(k); });
@@ -500,7 +504,7 @@ function metaSource_(p, cfg) {
   return {
     url:   p.url   || cfg.metaSheetUrl,
     tab:   p.tab   || cfg.metaTab   || 'QUERY - RAW DATA',
-    range: p.range || cfg.metaRange || 'AH:AP'
+    range: p.range || cfg.metaRange || 'AH:AR'
   };
 }
 
@@ -515,7 +519,7 @@ function metaPreview_(url, tab, range) {
   var t = src.getSheetByName(s.tab);
   if (!t) return { ok: false, error: 'tab "' + s.tab + '" not found' };
   var block = colBlock_(s.range);
-  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AP)' };
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AR)' };
   var lastRow = t.getLastRow();
   if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
 
@@ -545,7 +549,7 @@ function syncMeta_(p) {
   var tab = src.getSheetByName(s.tab);
   if (!tab) return { ok: false, error: 'tab "' + s.tab + '" not found' };
   var block = colBlock_(s.range);
-  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AP)' };
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AR)' };
   var lastRow = tab.getLastRow();
   if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
 
@@ -554,6 +558,7 @@ function syncMeta_(p) {
   if (col.missing.length) return { ok: false, error: 'missing columns in ' + s.range + ': ' + col.missing.join(', ') };
 
   var out = [], skipped = 0, tags = {};
+  var feedByDate = {};   // date -> { tag -> {budget, active} }  (for the latest-day feed)
   for (var r = 1; r < values.length; r++) {
     var row = values[r];
     var camp = String(row[col.campaign] || '').trim();
@@ -562,12 +567,20 @@ function syncMeta_(p) {
     if (metaNoTag_(row[col.tag])) { skipped++; continue; }         // no tag → inactive, excluded
     var date = normalize_(row[col.date]);
     if (!date) continue;
+    var tag = String(row[col.tag]).trim();
     var impr = col.impr   < 0 ? 0 : (parseNumber_(row[col.impr])   || 0);
     var clk  = col.clicks < 0 ? 0 : (parseNumber_(row[col.clicks]) || 0);
     var conv = (col.webConv < 0 ? 0 : (parseNumber_(row[col.webConv]) || 0)) +
                (col.fbLeads < 0 ? 0 : (parseNumber_(row[col.fbLeads]) || 0));
-    out.push([date, String(row[col.tag]).trim(), camp, round2_(spendRaw || 0), impr, clk, round2_(conv), 0]);
-    tags[String(row[col.tag]).trim()] = true;
+    out.push([date, tag, camp, round2_(spendRaw || 0), impr, clk, round2_(conv), 0]);
+    tags[tag] = true;
+
+    // feed: per franchise per day, sum ACTIVE campaigns' daily budget + set active flag
+    var isActive = col.status < 0 ? true : (String(row[col.status] || '').trim().toUpperCase() === 'ACTIVE');
+    var db = col.dailyBudget < 0 ? 0 : (parseNumber_(row[col.dailyBudget]) || 0);
+    var fb = (feedByDate[date] = feedByDate[date] || {});
+    var ft = (fb[tag] = fb[tag] || { budget: 0, active: false });
+    if (isActive) { ft.budget += db; ft.active = true; }
   }
 
   // Full rewrite of Meta_Daily (rolling window; never stacks duplicates on re-sync).
@@ -577,9 +590,23 @@ function syncMeta_(p) {
   mt.getRange(1, 1, body.length, TABS.metaDaily.header.length).setValues(body);
   forceText_(mt, TABS.metaDaily);
 
+  // Meta feed = the LATEST day's per-franchise daily budget (active campaigns only) + status.
+  var feedRows = [], now = new Date();
+  var dates = Object.keys(feedByDate);
+  if (dates.length) {
+    var fmap = feedByDate[dates.sort()[dates.length - 1]];
+    Object.keys(fmap).sort().forEach(function (tg) {
+      feedRows.push([tg, round2_(fmap[tg].budget), fmap[tg].active ? 'active' : 'paused', now]);
+    });
+  }
+  var mf = ss.getSheetByName(TABS.metaFeed.name) || ss.insertSheet(TABS.metaFeed.name);
+  mf.clearContents();
+  var fbody = [TABS.metaFeed.header].concat(feedRows);
+  mf.getRange(1, 1, fbody.length, TABS.metaFeed.header.length).setValues(fbody);
+
   setConfigMany_({ metaSheetUrl: s.url, metaTab: s.tab, metaRange: s.range, lastMetaSync: currentDate_() });
   bustCache_();
-  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped };
+  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped, feed: feedRows.length };
 }
 
 function round2_(n) { return Math.round(Number(n) * 100) / 100; }

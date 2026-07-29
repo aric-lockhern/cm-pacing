@@ -648,7 +648,7 @@ const key = s => String(s||'').trim().toLowerCase();
 // which channel's data + rules to use
 function channelCfg(){
   if(CHANNEL==='lsa')  return { platform:'LSA',    fee:Number(CFG.lsaFee)||0,  mode:'burndown', budgetMonth:'pool', feedRows:DATA.lsa||[], dailyRows:DATA.dailyLsa||[], dailyCols:['Spend',null,'Conv',null], hasBudgets:true };
-  if(CHANNEL==='meta') return { platform:'Meta',   fee:Number(CFG.metaFee)||0, mode:'monthly',  budgetMonth:MONTH, feedRows:[],           dailyRows:DATA.metaDaily||[], dailyCols:['Spend','Clicks','Leads/Conv','Revenue'], hasBudgets:true, campaignCol:'Campaign' };
+  if(CHANNEL==='meta') return { platform:'Meta',   fee:Number(CFG.metaFee)||0, mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.metaFeed||[], dailyRows:DATA.metaDaily||[], dailyCols:['Spend','Clicks','Leads/Conv','Revenue'], hasBudgets:true, campaignCol:'Campaign' };
   return                      { platform:'Google', fee:Number(CFG.googleFee)||0,mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.google||[],dailyRows:DATA.dailyG||[],    dailyCols:['Spend','Clicks','Conv','Revenue'], hasBudgets:true };
 }
 
