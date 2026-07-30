@@ -12,7 +12,7 @@
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
-var SHARED_SECRET     = 'fp_7Kq2mZ9xLw4vRt';   // must match app + ads scripts
+var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
 var SLACK_BOT_TOKEN   = '';                            // xoxb-... with users:read (optional)
 var SLACK_CHANNEL     = '#pacing';                     // display only
