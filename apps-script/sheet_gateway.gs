@@ -11,6 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
+var GATEWAY_VERSION   = '2026-08-03';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -214,6 +215,7 @@ function getDataString_(force) {
 
   var payload = {
     ok: true,
+    gatewayVersion: GATEWAY_VERSION,
     generatedAt: new Date().toISOString(),
     google:     readTab_(ss, TABS.google),
     googleCampaigns: readTab_(ss, TABS.googleCampaigns),

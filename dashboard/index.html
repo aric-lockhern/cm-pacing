@@ -350,6 +350,7 @@
     <div class="settings-row"><label>Your name</label><input id="setName" placeholder="Jane Doe"> <span class="muted" style="font-size:12px">signs your flag emails</span></div>
     <div class="settings-row"><label>Gateway URL</label><input id="setUrl" placeholder="leave blank to use default"></div>
     <div class="settings-row"><label>Shared secret</label><input id="setSecret" placeholder="leave blank to use default"></div>
+    <div class="hint" id="gwInfo"></div>
 
     <div class="settings-row" style="margin-top:16px"><label></label>
       <button class="primary" onclick="saveSettings()">Save</button>
@@ -1577,6 +1578,14 @@ function openSettings(){
   document.getElementById('setName').value = LS.name();
   document.getElementById('setUrl').value = localStorage.getItem('pace_url')||'';
   document.getElementById('setSecret').value = localStorage.getItem('pace_secret')||'';
+  (function(){
+    const gv = DATA && DATA.gatewayVersion ? DATA.gatewayVersion : 'unknown (old gateway)';
+    const gc = DATA && Array.isArray(DATA.googleCampaigns) && DATA.googleCampaigns.length;
+    const mf = DATA && Array.isArray(DATA.metaFeed) && DATA.metaFeed.length;
+    document.getElementById('gwInfo').innerHTML =
+      `Gateway version: <b>${esc(String(gv))}</b> · Google_Campaigns rows: <b>${gc||0}</b> · Meta_Feed rows: <b>${mf||0}</b>. `
+      + `If the version isn't the latest after you deploy, the deployment didn't take — use Deploy ▸ Manage deployments ▸ ✏️ ▸ New version (not Save).`;
+  })();
   document.getElementById('setScrim').classList.add('on');
 }
 function closeSettings(){ document.getElementById('setScrim').classList.remove('on'); }
