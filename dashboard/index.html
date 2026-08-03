@@ -142,6 +142,16 @@
   .exec-chart-head b{font-size:14px}
   #execCanvas{width:100%;height:240px;margin-top:0}
 
+  /* budget recommendations / opportunities */
+  #recs{margin-bottom:8px}
+  .recbox{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:10px 12px}
+  .rec-h{font-weight:700;font-size:13px;margin:2px 0 4px}
+  .rec-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+  .rec-h + .rec-row{border-top:0}
+  .rec-t{flex:1;font-size:13px;line-height:1.35}
+  .rec-a{white-space:nowrap}
+  .rec-a button{font-size:12px;padding:5px 11px}
+
   /* wide tables scroll inside their own box so the page never scrolls sideways */
   .tablewrap,.exec-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .exec-scroll table{margin:0}
@@ -202,6 +212,7 @@
 
   <div id="budgetBanner"></div>
   <div id="alerts" class="alerts"></div>
+  <div id="recs"></div>
 
   <div class="toolbar" id="mainToolbar">
     <input id="search" placeholder="Filter franchises…" oninput="render()">
@@ -803,6 +814,7 @@ function build(){
       hasBudget:gross>0, dailyTarget, series, alert, corrected,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
   });
+  MODEL.forEach(r=>{ r.rec = budgetRec(r); r.opp = budgetOpp(r); });   // Google budget recs / opportunities
 }
 // find a display name from the feed rows when there's no budget/group entry
 function feedName(CH, k){
@@ -889,6 +901,75 @@ function correctionBadge(series, pace){
   return null;
 }
 
+/* ── budget recommendations (Google only) ─────────────────────────────────
+   Pacing rec = the daily budget needed to finish the month exactly on the client's
+   target, surfaced only when the current budget is materially off. This is the one
+   that can be auto-applied — it never spends beyond the approved (billed) target.
+   Opportunity = advisory only (efficiency vs the account's OWN trailing 30-day CPL);
+   it never auto-applies because "scale a winner" means spending past what the client
+   paid for — that's a budget conversation, not a knob. */
+function budgetRec(r){
+  if(CHANNEL!=='google' || !r.hasBudget || !r.live || !(r.dailyBudget>0) || !(r.reqDaily>0)) return null;
+  const cur=r.dailyBudget, need=Math.round(r.reqDaily);
+  if(need<=0) return null;
+  if(cur < r.reqDaily*0.9)  return {dir:'up',   newDaily:need, reason:`pacing ${pct(r.pace)} · raise daily budget ${money(cur)} → ${money(need)} to finish on target`};
+  if(cur > r.reqDaily*1.15) return {dir:'down', newDaily:need, reason:`pacing ${pct(r.pace)} · lower daily budget ${money(cur)} → ${money(need)} to avoid overspend`};
+  return null;
+}
+function budgetOpp(r){
+  if(CHANNEL!=='google' || !r.live) return null;
+  const C=alertCfg(), w=rollingWindows();
+  const rec=sumRange(r.series,w.recentStart,w.recentEnd), pri=sumRange(r.series,w.priorStart,w.priorEnd);
+  if(rec.conv < C.minLeads || pri.conv < C.minLeads) return null;
+  const recCPL=rec.conv?rec.spend/rec.conv:0, priCPL=pri.conv?pri.spend/pri.conv:0;
+  if(!priCPL || !recCPL) return null;
+  const d=(recCPL-priCPL)/priCPL;   // <0 = improving efficiency vs its own average
+  if(d <= -0.15 && r.onTarget < 1.02)
+    return {tier:'grow', txt:`CPL ${pctTxt(-d)} below its 30-day avg (${money(recCPL)} vs ${money(priCPL)}) with ${fmtLeads(rec.conv)} leads — efficient; consider raising this client's budget`};
+  if(d >= 0.20)
+    return {tier:'warn', txt:`CPL ${pctTxt(d)} above its 30-day avg (${money(recCPL)} vs ${money(priCPL)}) — review before adding budget`};
+  return null;
+}
+function jsStr(s){ return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function queueStatus(){
+  const m={};
+  (DATA&&DATA.budgetQueue||[]).forEach(row=>{ const k=key(row.Label); if(!k) return;
+    m[k]={status:String(row.Status||'').toLowerCase(), amt:Number(row.NewDailyBudget)||0, note:row.Note||''}; });   // last row per label wins
+  return m;
+}
+function renderRecs(){
+  const el=document.getElementById('recs'); if(!el) return;
+  if(!DATA || CHANNEL!=='google'){ el.innerHTML=''; return; }
+  const qs=queueStatus();
+  const recRows=MODEL.filter(r=>!r.hidden && r.rec);
+  const oppRows=MODEL.filter(r=>!r.hidden && r.opp);
+  if(!recRows.length && !oppRows.length){ el.innerHTML=''; return; }
+  let html='<div class="recbox">';
+  if(recRows.length){
+    html+=`<div class="rec-h">💡 Budget recommendations · ${recRows.length}</div>`;
+    html+=recRows.map(r=>{
+      const q=qs[r.k];
+      const chip = q ? (q.status==='pending'?'<span class="chip">queued</span>'
+        : q.status==='applied'?`<span class="chip live">applied</span>`
+        : q.status==='failed'?`<span class="chip err" title="${esc(q.note)}">failed</span>`:'') : '';
+      const btn=`<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${r.rec.newDaily})">Apply → ${money(r.rec.newDaily)}/day</button>`;
+      return `<div class="rec-row"><div class="rec-t">${r.rec.dir==='up'?'▲':'▼'} <b>${esc(r.name)}</b> — ${esc(r.rec.reason)}</div><div class="rec-a">${chip||btn}</div></div>`;
+    }).join('');
+  }
+  if(oppRows.length){
+    html+=`<div class="rec-h" style="margin-top:8px">✨ Opportunities · ${oppRows.length} <span class="muted" style="font-weight:400;font-size:12px">— advisory, not auto-applied</span></div>`;
+    html+=oppRows.map(r=>`<div class="rec-row"><div class="rec-t ${r.opp.tier==='grow'?'pos':'mid'}">${r.opp.tier==='grow'?'✨':'⚠️'} <b>${esc(r.name)}</b> — ${esc(r.opp.txt)}</div></div>`).join('');
+  }
+  el.innerHTML=html+'</div>';
+}
+async function applyRec(btn, label, amount){
+  if(!confirm(`Queue a daily-budget change for "${label}" to ${money(amount)}/day?\n\nIt is applied by the hourly Google Ads script (Google only), within safety limits, and you'll get a confirmation email.`)) return;
+  if(btn){ btn.disabled=true; btn.textContent='Queuing…'; }
+  const res = await call({action:'queueBudget', label, amount, by:LS.name()||''});
+  if(res && res.ok){ load(true); }
+  else { alert('Failed to queue: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; } }
+}
+
 /* ── render ────────────────────────────────────────────────────────── */
 function visible(){
   let rows = MODEL.slice();
@@ -928,6 +1009,7 @@ function render(){
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
+  renderRecs();
   renderRows();
 }
 

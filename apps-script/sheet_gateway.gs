@@ -28,6 +28,7 @@ var TABS = {
   metaFeed:   { name: 'Meta_Feed',     header: ['Label','DailyBudget','Status','Updated'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
+  budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
   groups:     { name: 'Groups',        header: ['Label','Group','Hidden','Type','Manager','Updated'] },
   dismissals: { name: 'Dismissals',    header: ['Label','Until','Updated'] },
   team:       { name: 'Team',          header: ['Name','SlackID'] },
@@ -71,6 +72,7 @@ function doGet(e) {
       case 'budgetColumns':out = budgetColumns_(p.url, p.tab); break;
       case 'syncMeta':     out = syncMeta_(p); break;
       case 'metaPreview':  out = metaPreview_(p.url, p.tab, p.range); break;
+      case 'queueBudget':  out = queueBudget_(p); break;
       case 'setType':    out = setGroupField_(p.label, 'Type', p.value); break;
       case 'setManager': out = setGroupField_(p.label, 'Manager', p.value); break;
       case 'setHidden':  out = setGroupField_(p.label, 'Hidden', p.value); break;
@@ -218,6 +220,7 @@ function getDataString_(force) {
     dailyLsa:   readTab_(ss, TABS.dailyLsa),
     metaDaily:  readTab_(ss, TABS.metaDaily),
     metaFeed:   readTab_(ss, TABS.metaFeed),
+    budgetQueue:readTab_(ss, TABS.budgetQueue),
     budgets:    readTab_(ss, TABS.budgets),
     budgetLog:  readTab_(ss, TABS.budgetLog),
     groups:     readTab_(ss, TABS.groups),
@@ -618,6 +621,34 @@ function syncMeta_(p) {
 }
 
 function round2_(n) { return Math.round(Number(n) * 100) / 100; }
+
+/* ── budget queue (pacing auto-adjust) ───────────────────────────────────────
+ * The app writes a requested per-franchise daily budget here; the hourly Google
+ * Ads "budget_apply" script reads PENDING rows, applies them to campaigns within
+ * safety limits, and writes back status + emails a summary. We supersede any older
+ * pending request for the same franchise so only the newest is applied. */
+function queueBudget_(p) {
+  var label = String((p && p.label) || '').trim();
+  var amt = Number(p && p.amount);
+  if (!label) return { ok: false, error: 'no franchise' };
+  if (isNaN(amt) || amt < 0) return { ok: false, error: 'bad amount' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetQueue.name) || ss.insertSheet(TABS.budgetQueue.name);
+  ensureHeader_(tab, TABS.budgetQueue);
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  var changed = false;
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][h.Label]).trim().toLowerCase() === label.toLowerCase() &&
+        String(vals[i][h.Status]).trim().toLowerCase() === 'pending') {
+      vals[i][h.Status] = 'superseded'; vals[i][h.Note] = 'replaced by a newer request'; changed = true;
+    }
+  }
+  if (changed) tab.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+  tab.appendRow([new Date(), label, round2_(amt), String((p && p.by) || ''), 'pending', '', '']);
+  bustCache_();
+  return { ok: true };
+}
 
 /* ── budget sync from a linked sheet (column-mapped) ─────────────────────── */
 
