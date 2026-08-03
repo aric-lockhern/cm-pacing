@@ -982,10 +982,10 @@ function renderBudget(r){
     const nm=g.names.join(', ')+(g.names.length>1?' · shared':'');
     const sugg = (g.daily!=null && factor!=null) ? Math.round(g.daily*factor) : null;
     const d = (sugg!=null) ? sugg-g.daily : null;
-    const cpl=cplOf(g.names), leads=leadsOf(g.names);
+    const cpl=cplOf(g.names), leads=leadsOf(g.names), hasPerf=g.names.some(n=>perf[n]);
     return `<tr><td>${esc(nm)}</td>`
       + `<td>${g.daily!=null?money(g.daily):'—'}</td>`
-      + `<td>${leads?fmtLeads(leads):'—'}</td>`
+      + `<td>${hasPerf?fmtLeads(leads):'—'}</td>`
       + `<td>${cpl?money(cpl):'—'}</td>`
       + `<td>${sugg!=null?money(sugg):'—'}${d?` <span class="${d>0?'pos':'neg'}" style="font-size:11px">${d>0?'+':''}${money(d)}</span>`:''}</td>`
       + `<td>${perfTag(cpl)}</td></tr>`;
@@ -993,10 +993,10 @@ function renderBudget(r){
 
   let html='<div class="recbox" style="margin:12px 0">'
     + '<div class="rec-h">Campaign budgets · pace, then performance</div>'
-    + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> set to <b>${money(cur)}</b>/day · pace suggests <b>${need>0?money(need):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
-    + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Set to /day</th><th>Leads 30d</th><th>CPL 30d</th><th>Pace-suggested</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
-    + (gids.length ? '' : '<div class="muted" style="font-size:11px;margin-top:6px">“Set to” / “Pace-suggested” per campaign appear after the updated Google feed runs (writes the Google_Campaigns tab). CPL and performance show now.</div>')
-    + '<div class="muted" style="font-size:11px;margin-top:6px">Pace-suggested keeps the franchise on its monthly target with the split unchanged. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
+    + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> current cap <b>${money(cur)}</b>/day · recommended <b>${need>0?money(need):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
+    + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current Budget Cap</th><th>Leads 30d</th><th>CPL 30d</th><th>Recommended</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
+    + (gids.length ? '' : '<div class="muted" style="font-size:11px;margin-top:6px">Per-campaign “Current Budget Cap” / “Recommended” appear after the updated Google feed runs (writes the Google_Campaigns tab). Leads/CPL show now.</div>')
+    + '<div class="muted" style="font-size:11px;margin-top:6px">Recommended keeps the franchise on its monthly target with the split unchanged. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
     + '</div>';
   el.innerHTML=html;
 }
@@ -1402,7 +1402,7 @@ async function prefetchCampaigns(){
       r.gLoaded = true;   // no per-account fetch needed anymore
     });
     PREFETCHED = true;
-    if(DD.k){ const r = MODEL.find(x=>x.k===DD.k); if(r) renderSplit(r); }
+    if(DD.k){ const r = MODEL.find(x=>x.k===DD.k); if(r){ renderBudget(r); renderSplit(r); } }
   }catch(e){ /* deep-dives fall back to per-account loading */ }
 }
 
@@ -1423,7 +1423,7 @@ async function ensureCampaigns(r){
     }
   }catch(e){ /* leave split empty */ }
   r.gLoaded=true;
-  if(DD.k===r.k) renderSplit(r);
+  if(DD.k===r.k){ renderBudget(r); renderSplit(r); }
 }
 function closeDD(){ document.getElementById('ddScrim').classList.remove('on'); }
 function ddSet(field, value){ DD[field]=value; renderDD(); }
