@@ -34,9 +34,11 @@ var ACCOUNT_ALIASES    = { /* 'Waxing - 1812 Marketing': 'Waxing', */ };
 var FEED_TAB   = 'Google_Feed';
 var DAILY_TAB  = 'Daily_Google';
 var CAMP_TAB   = 'Daily_Google_Campaign';
+var CAMPB_TAB  = 'Google_Campaigns';   // per-campaign current daily budget snapshot (for deep-dive recs)
 var FEED_HEADER  = ['Label', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue', 'DailyBudget', 'Status', 'Updated'];
 var DAILY_HEADER = ['Date', 'Label', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue'];
 var CAMP_HEADER  = ['Date', 'Label', 'Campaign', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue'];
+var CAMPB_HEADER = ['Label', 'Campaign', 'BudgetId', 'DailyBudget', 'Status'];
 
 function main() {
   var ss = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
@@ -52,7 +54,7 @@ function main() {
     return Utilities.formatDate(d, AdsApp.currentAccount().getTimeZone(), 'yyyyMMdd');
   })();
 
-  var daily = {}, mtd = {}, camp = {}, enabled = {}, allFr = {}, budgets = {};
+  var daily = {}, mtd = {}, camp = {}, enabled = {}, allFr = {}, budgets = {}, campBudgets = [];
   var acctCount = 0, totalCampaigns = 0;
 
   var selector = AdsManagerApp.accounts();
@@ -114,6 +116,7 @@ function main() {
 
         fr.forEach(function (f) {
           allFr[f] = true;
+          campBudgets.push([f, cname, bId, r2(bAmt), isOn ? 'active' : 'paused']);   // per-campaign current budget
           if (isOn) {
             enabled[f] = true;
             if (!budgets[f]) budgets[f] = {};
@@ -167,6 +170,7 @@ function main() {
   writeFeed_(ss, mtd, enabled, allFr, budgets);
   writeDaily_(ss, daily);
   writeCamp_(ss, camp);
+  writeCampBudgets_(ss, campBudgets);
 
   Logger.log('──────── summary ────────');
   Logger.log('Accounts matched "' + ACCOUNT_LABEL + '": ' + acctCount + ' | campaigns: ' + totalCampaigns);
@@ -230,6 +234,15 @@ function writeCamp_(ss, camp) {
     });
   });
   tab.getRange(1, 1, out.length, CAMP_HEADER.length).setValues(out);
+}
+
+// Per-campaign current daily budget snapshot, so the app can show current-vs-recommended
+// budgets at the campaign level inside an account's deep-dive.
+function writeCampBudgets_(ss, rows) {
+  var tab = ensureTab_(ss, CAMPB_TAB);
+  tab.clearContents();
+  var out = [CAMPB_HEADER].concat(rows);
+  tab.getRange(1, 1, out.length, CAMPB_HEADER.length).setValues(out);
 }
 
 function ensureTab_(ss, name) { var t = ss.getSheetByName(name); if (!t) t = ss.insertSheet(name); return t; }

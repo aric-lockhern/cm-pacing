@@ -20,6 +20,7 @@ var SLACK_CHANNEL     = '#pacing';                     // display only
 
 var TABS = {
   google:     { name: 'Google_Feed',   header: ['Label','Spend','Conv','Clicks','Impr','Revenue','DailyBudget','Status','Updated'] },
+  googleCampaigns:{ name: 'Google_Campaigns', header: ['Label','Campaign','BudgetId','DailyBudget','Status'] },
   dailyG:     { name: 'Daily_Google',  header: ['Date','Label','Spend','Conv','Clicks','Impr','Revenue'] },
   dailyGCamp: { name: 'Daily_Google_Campaign', header: ['Date','Label','Campaign','Spend','Conv','Clicks','Impr','Revenue'] },
   lsa:        { name: 'LSA_Feed',      header: ['Label','Spend','Conv','Status','Updated'] },
@@ -215,6 +216,7 @@ function getDataString_(force) {
     ok: true,
     generatedAt: new Date().toISOString(),
     google:     readTab_(ss, TABS.google),
+    googleCampaigns: readTab_(ss, TABS.googleCampaigns),
     dailyG:     readTab_(ss, TABS.dailyG),
     lsa:        readTab_(ss, TABS.lsa),
     dailyLsa:   readTab_(ss, TABS.dailyLsa),

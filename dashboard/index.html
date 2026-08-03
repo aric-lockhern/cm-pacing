@@ -212,7 +212,6 @@
 
   <div id="budgetBanner"></div>
   <div id="alerts" class="alerts"></div>
-  <div id="recs"></div>
 
   <div class="toolbar" id="mainToolbar">
     <input id="search" placeholder="Filter franchises…" oninput="render()">
@@ -937,29 +936,44 @@ function queueStatus(){
     m[k]={status:String(row.Status||'').toLowerCase(), amt:Number(row.NewDailyBudget)||0, note:row.Note||''}; });   // last row per label wins
   return m;
 }
-function renderRecs(){
-  const el=document.getElementById('recs'); if(!el) return;
-  if(!DATA || CHANNEL!=='google'){ el.innerHTML=''; return; }
-  const qs=queueStatus();
-  const recRows=MODEL.filter(r=>!r.hidden && r.rec);
-  const oppRows=MODEL.filter(r=>!r.hidden && r.opp);
-  if(!recRows.length && !oppRows.length){ el.innerHTML=''; return; }
-  let html='<div class="recbox">';
-  if(recRows.length){
-    html+=`<div class="rec-h">💡 Budget recommendations · ${recRows.length}</div>`;
-    html+=recRows.map(r=>{
-      const q=qs[r.k];
-      const chip = q ? (q.status==='pending'?'<span class="chip">queued</span>'
-        : q.status==='applied'?`<span class="chip live">applied</span>`
-        : q.status==='failed'?`<span class="chip err" title="${esc(q.note)}">failed</span>`:'') : '';
-      const btn=`<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${r.rec.newDaily})">Apply → ${money(r.rec.newDaily)}/day</button>`;
-      return `<div class="rec-row"><div class="rec-t">${r.rec.dir==='up'?'▲':'▼'} <b>${esc(r.name)}</b> — ${esc(r.rec.reason)}</div><div class="rec-a">${chip||btn}</div></div>`;
-    }).join('');
+// per-campaign current daily budgets, by franchise (from the Google feed)
+function gCampBudgets(){
+  const m={};
+  (DATA&&DATA.googleCampaigns||[]).forEach(row=>{ const k=key(row.Label); if(!k) return;
+    (m[k]=m[k]||[]).push({campaign:String(row.Campaign||''), bid:String(row.BudgetId||''), daily:Number(row.DailyBudget)||0, status:String(row.Status||'').toLowerCase()}); });
+  return m;
+}
+// Budget & Opportunities section inside the account deep-dive (Google only).
+function renderBudget(r){
+  const el=document.getElementById('ddBudget'); if(!el) return;
+  if(CHANNEL!=='google' || !r.hasBudget){ el.innerHTML=''; return; }
+  const q=queueStatus()[r.k], rec=r.rec, opp=r.opp;
+  const cur=r.dailyBudget||0, need=Math.round(r.reqDaily||0);
+  // per-campaign current budgets grouped by shared budget id (active campaigns)
+  const camps=(gCampBudgets()[r.k]||[]).filter(c=>c.status==='active');
+  const groups={};
+  camps.forEach(c=>{ (groups[c.bid]=groups[c.bid]||{names:[],daily:c.daily}).names.push(c.campaign||'—'); });
+  const gids=Object.keys(groups);
+  const curTotal=gids.length ? gids.reduce((a,id)=>a+groups[id].daily,0) : cur;
+  const factor=(curTotal>0 && need>0) ? need/curTotal : null;
+
+  const action = q&&q.status==='pending' ? '<span class="chip">queued</span>'
+    : q&&q.status==='applied' ? '<span class="chip live">applied</span>'
+    : q&&q.status==='failed' ? `<span class="chip err" title="${esc(q.note)}">failed</span>`
+    : rec ? `<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${rec.newDaily})">Apply → ${money(rec.newDaily)}/day</button>`
+    : '<span class="muted" style="font-size:12px">on target</span>';
+
+  let html='<div class="recbox" style="margin:12px 0">'
+    + `<div class="rec-h">Budget${rec?` · <span class="${rec.dir==='up'?'pos':'neg'}">${rec.dir==='up'?'▲ under-budgeted':'▼ over-budgeted'}</span>`:''}</div>`
+    + `<div class="rec-row" style="border-top:0"><div class="rec-t">Franchise daily budget <b>${money(cur)}</b> → recommended <b>${need>0?money(need):'—'}</b> <span class="muted">· pacing ${pct(r.pace)}</span></div><div class="rec-a">${action}</div></div>`;
+  if(gids.length && factor){
+    html+='<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current/day</th><th>Recommended/day</th></tr></thead><tbody>'
+      + gids.map(id=>{ const g=groups[id]; const nm=g.names.join(', ')+(g.names.length>1?' · shared':''); return `<tr><td>${esc(nm)}</td><td>${money(g.daily)}</td><td>${money(Math.round(g.daily*factor))}</td></tr>`; }).join('')
+      + '</tbody></table>';
+  } else if(!gids.length){
+    html+='<div class="muted" style="font-size:12px;margin-top:6px">Per-campaign budgets appear here once the updated Google feed script has run.</div>';
   }
-  if(oppRows.length){
-    html+=`<div class="rec-h" style="margin-top:8px">✨ Opportunities · ${oppRows.length} <span class="muted" style="font-weight:400;font-size:12px">— advisory, not auto-applied</span></div>`;
-    html+=oppRows.map(r=>`<div class="rec-row"><div class="rec-t ${r.opp.tier==='grow'?'pos':'mid'}">${r.opp.tier==='grow'?'✨':'⚠️'} <b>${esc(r.name)}</b> — ${esc(r.opp.txt)}</div></div>`).join('');
-  }
+  if(opp) html+=`<div class="rec-row"><div class="rec-t ${opp.tier==='grow'?'pos':'mid'}">${opp.tier==='grow'?'✨':'⚠️'} ${esc(opp.txt)}</div></div>`;
   el.innerHTML=html+'</div>';
 }
 async function applyRec(btn, label, amount){
@@ -1009,7 +1023,6 @@ function render(){
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
-  renderRecs();
   renderRows();
 }
 
@@ -1145,8 +1158,11 @@ function renderRows(){
       : (r.corrected?`<span class="badge b-fixed">${r.corrected.txt}</span>`:'');
     const hidBadge = r.hidden
       ? `<span class="badge b-fixed" style="cursor:pointer" title="Click to restore this account" onclick="setHidden('${r.k}',false)">hidden ↩</span>` : '';
+    const recBadge = r.rec
+      ? `<span class="badge ${r.rec.dir==='up'?'b-grow':'b-warn'}" style="cursor:pointer" title="Budget recommendation — click the name to review" onclick="openDD('${r.k}')">${r.rec.dir==='up'?'▲':'▼'} budget</span>`
+      : (r.opp?`<span class="badge b-grow" style="cursor:pointer" title="Opportunity — click the name to review" onclick="openDD('${r.k}')">✨</span>`:'');
     return `<tr${r.hidden?' style="opacity:.55"':''}>
-      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${badge}${hidBadge}</div></td>
+      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${badge}${recBadge}${hidBadge}</div></td>
       <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
       <td>${r.live?'<span class="pos">active</span>':'<span class="muted">paused</span>'}</td>
       <td>${money(r.spend*F)}</td>
@@ -1302,6 +1318,7 @@ function openDD(k){
       <div class="c"><div class="l">Daily Target</div><div class="v">${money(r.dailyTarget*gfx(r))}</div></div>
       <div class="c"><div class="l">Pace</div><div class="v ${r.pace>1.05?'neg':r.pace<0.9?'mid':'pos'}">${pct(r.pace)}</div></div>
     </div>
+    <div id="ddBudget"></div>
     <div class="ddctrls">
       <div class="seg" id="ddMetric"></div>
       <div class="grow"></div>
@@ -1410,6 +1427,7 @@ function renderDD(){
     + tRows.map(b=>`<tr><td>${b.label}</td><td>${M.fmt(M.agg(b,F))}</td></tr>`).join('')
     + `</tbody><tfoot><tr><td>${DD.period}-day total</td><td>${M.fmt(totalVal)}</td></tr></tfoot></table>`;
 
+  renderBudget(r);
   renderSplit(r);
 }
 
