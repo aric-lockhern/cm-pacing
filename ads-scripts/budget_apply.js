@@ -8,7 +8,7 @@
  *
  * ── SAFETY (why this is safe to run) ──
  *  • Touches only ENABLED, non-ENDED campaigns; paused/ended are skipped.
- *  • Any campaign/account carrying a SAFE_LABELS tag (e.g. DoNotTouch) is never touched.
+ *  • Any campaign carrying a SAFE_LABELS tag (e.g. DoNotTouch) is never touched.
  *  • Every change is clamped to [MIN_DAILY, MAX_DAILY] AND to ±MAX_CHANGE_PCT of the
  *    franchise's current total, so a bad input can't blow up a budget.
  *  • DRY_RUN=true logs what WOULD change without touching anything — leave it on until
@@ -17,6 +17,14 @@
  *    requested franchise total while preserving the existing split.
  *  • The app only ever queues a target that finishes the month on the client's approved
  *    (billed) budget — it never asks to spend past what the client paid for.
+ *
+ * ── WHY GAQL (Performance Max fix) ──
+ *  AdsApp.campaigns() only returns Search & Display campaigns — it silently OMITS
+ *  Performance Max, Shopping, and Video. Accounts that are PMAX-only (e.g. some
+ *  Fetch locations) would report "no active campaigns found". We instead enumerate
+ *  campaigns via GAQL `FROM campaign` (returns EVERY type, exactly like the feed)
+ *  and set budgets by budget id via AdsApp.budgets().withIds() — which is
+ *  campaign-type-agnostic.
  *
  * DEPLOY: add to the SAME MCC as google_pacing_feed.js; schedule it HOURLY.
  * ── CONFIG ─────────────────────────────────────────────────────────────── */
@@ -60,7 +68,8 @@ function main() {
   var ignore = {}; IGNORE_LABELS.forEach(function (n) { ignore[n.toLowerCase()] = true; });
   var safe = {};   SAFE_LABELS.forEach(function (n) { safe[n.toLowerCase()] = true; });
 
-  // franchise -> [{campaign, budget}] across accounts (ENABLED, non-ended, non-safe)
+  // franchise -> { budgets: {budgetId -> {cur, ids:[]}}, acctName }
+  // Collected across accounts by enumerating EVERY campaign type via GAQL.
   var found = {};
   var sel = AdsManagerApp.accounts();
   if (ACCOUNT_LABEL) sel = sel.withCondition("LabelNames CONTAINS '" + ACCOUNT_LABEL + "'");
@@ -76,39 +85,49 @@ function main() {
         (campLabels[String(lr.campaign.id)] = campLabels[String(lr.campaign.id)] || []).push(lr.label.name); }
     } catch (e) { Logger.log('  [' + acctName + '] label query failed: ' + e); }
 
-    var ended = {};   // ENDED campaigns to skip (best-effort)
-    try {
-      var eit = AdsApp.search("SELECT campaign.id FROM campaign WHERE campaign.serving_status = 'ENDED'");
-      while (eit.hasNext()) ended[String(eit.next().campaign.id)] = true;
-    } catch (e2) { /* serving_status unavailable — skip the ended filter */ }
+    // Enumerate ALL enabled, serving (non-ended) campaigns of EVERY type via GAQL.
+    // campaign_budget.id + amount_micros come back on the same row — no extra query.
+    var q = "SELECT campaign.id, campaign.name, campaign.serving_status, " +
+            "campaign_budget.id, campaign_budget.amount_micros " +
+            "FROM campaign WHERE campaign.status = 'ENABLED'";
+    var cit;
+    try { cit = AdsApp.search(q); }
+    catch (eq) { Logger.log('  [' + acctName + '] campaign query failed: ' + eq); continue; }
 
-    var cit = AdsApp.campaigns().withCondition("Status = ENABLED").get();
     while (cit.hasNext()) {
-      var c = cit.next(); var id = String(c.getId());
-      if (ended[id]) continue;
-      var labs = campLabels[id] || [];
+      var row = cit.next();
+      var cid = String(row.campaign.id);
+      var serving = row.campaign.servingStatus;
+      if (serving === 'ENDED') continue;                       // skip ended campaigns
+      var labs = campLabels[cid] || [];
       if (labs.some(function (n) { return safe[n.toLowerCase()]; })) continue;   // DoNotTouch
+
       var fr = null;
       for (var i = 0; i < labs.length; i++) { if (!ignore[labs[i].toLowerCase()]) { fr = labs[i]; break; } }
-      if (!fr) fr = (UNLABELED_FALLBACK === 'campaign') ? c.getName() : acctName;
+      if (!fr) fr = (UNLABELED_FALLBACK === 'campaign') ? row.campaign.name : acctName;
       var flc = String(fr).toLowerCase();
       if (!pending[flc]) continue;
-      (found[flc] = found[flc] || []).push({ campaign: c, budget: c.getBudget() });
+
+      var bid = row.campaignBudget && row.campaignBudget.id != null ? String(row.campaignBudget.id) : null;
+      if (!bid) continue;                                      // no shared/standard budget id — can't set
+      var micros = Number(row.campaignBudget.amountMicros || 0);
+
+      var f = (found[flc] = found[flc] || { budgets: {}, acctName: acctName });
+      if (!f.budgets[bid]) f.budgets[bid] = { cur: micros / 1e6 };
     }
   }
 
-  // apply, franchise by franchise
+  // apply, franchise by franchise. Budgets are set while the OWNING account is selected.
   var results = [];
   keys.forEach(function (flc) {
     var p = pending[flc];
-    var camps = found[flc];
-    if (!camps || !camps.length) { mark_(data, H, p.row, 'failed', 'no active campaigns found'); results.push('X ' + p.label + ' — no active campaigns found'); return; }
+    var f = found[flc];
+    if (!f) { mark_(data, H, p.row, 'failed', 'no active campaigns found'); results.push('X ' + p.label + ' — no active campaigns found'); return; }
 
-    // dedupe shared budgets (same budget id counted once)
-    var budgets = {};
-    camps.forEach(function (x) { var bid = String(x.budget.getId()); if (!budgets[bid]) budgets[bid] = { b: x.budget, cur: x.budget.getAmount() }; });
-    var bids = Object.keys(budgets);
-    var curTotal = 0; bids.forEach(function (bid) { curTotal += budgets[bid].cur; });
+    var bids = Object.keys(f.budgets);
+    if (!bids.length) { mark_(data, H, p.row, 'failed', 'no editable budget found'); results.push('X ' + p.label + ' — no editable budget found'); return; }
+
+    var curTotal = 0; bids.forEach(function (bid) { curTotal += f.budgets[bid].cur; });
 
     var target = clamp_(p.newDaily, MIN_DAILY, MAX_DAILY);
     var capped = false;
@@ -119,16 +138,26 @@ function main() {
       target = clamped;
     }
 
+    // compute the per-budget target amounts (shared = 1 budget; split = proportional)
+    var plan = {};   // bid -> newAmount
+    if (bids.length === 1) {
+      plan[bids[0]] = clamp_(round2_(target), MIN_DAILY, MAX_DAILY);
+    } else {
+      var factor = curTotal > 0 ? target / curTotal : 1;
+      bids.forEach(function (bid) { plan[bid] = clamp_(round2_(f.budgets[bid].cur * factor), MIN_DAILY, MAX_DAILY); });
+    }
+
     try {
+      // Re-select the owning account, then set each budget by id (type-agnostic).
+      var applied = applyPlan_(f.acctName, plan);
+      if (!applied.ok) { mark_(data, H, p.row, 'failed', applied.note); results.push('X ' + p.label + ' — ' + applied.note); return; }
+
       var note;
       if (bids.length === 1) {
-        var only = budgets[bids[0]]; var amt = clamp_(round2_(target), MIN_DAILY, MAX_DAILY);
-        if (!DRY_RUN) only.b.setAmount(amt);
-        note = 'budget ' + round2_(only.cur) + ' -> ' + amt;
+        note = 'budget ' + round2_(f.budgets[bids[0]].cur) + ' -> ' + plan[bids[0]];
       } else {
-        var factor = curTotal > 0 ? target / curTotal : 1;
-        bids.forEach(function (bid) { var o = budgets[bid]; var a = clamp_(round2_(o.cur * factor), MIN_DAILY, MAX_DAILY); if (!DRY_RUN) o.b.setAmount(a); });
-        note = 'scaled ' + bids.length + ' budgets x' + round2_(factor) + ' (' + round2_(curTotal) + ' -> ' + round2_(target) + ')';
+        var factor2 = curTotal > 0 ? target / curTotal : 1;
+        note = 'scaled ' + bids.length + ' budgets x' + round2_(factor2) + ' (' + round2_(curTotal) + ' -> ' + round2_(target) + ')';
       }
       if (capped) note += ' [capped to +/-' + Math.round(MAX_CHANGE_PCT * 100) + '%]';
       mark_(data, H, p.row, DRY_RUN ? 'dry-run' : 'applied', note);
@@ -142,6 +171,37 @@ function main() {
   tab.getRange(1, 1, data.length, data[0].length).setValues(data);
   emailSummary_(results);
   Logger.log(results.join('\n'));
+}
+
+/**
+ * Set budgets by id within a given account. Returns {ok, note}.
+ * Budgets can only be fetched/edited while their account is the selected one, so
+ * we re-select here. AdsApp.budgets().withIds() is type-agnostic — it finds the
+ * budget behind a Performance Max / Shopping / Video campaign just as well as Search.
+ */
+function applyPlan_(acctName, plan) {
+  var bids = Object.keys(plan);
+  if (!bids.length) return { ok: false, note: 'nothing to set' };
+
+  // re-select the owning account
+  var target = null;
+  var accts = AdsManagerApp.accounts().withCondition("Name = '" + String(acctName).replace(/'/g, "\\'") + "'").get();
+  if (accts.hasNext()) target = accts.next();
+  if (!target) {
+    // fall back to a full scan (name lookup can miss on odd characters)
+    var all = AdsManagerApp.accounts().get();
+    while (all.hasNext()) { var a = all.next(); if ((a.getName() || a.getCustomerId()) === acctName) { target = a; break; } }
+  }
+  if (!target) return { ok: false, note: 'account "' + acctName + '" not found on re-select' };
+  AdsManagerApp.select(target);
+
+  if (DRY_RUN) return { ok: true, note: 'dry-run' };
+
+  var it = AdsApp.budgets().withIds(bids.map(Number)).get();
+  var set = 0;
+  while (it.hasNext()) { var b = it.next(); var id = String(b.getId()); if (plan[id] != null) { b.setAmount(plan[id]); set++; } }
+  if (!set) return { ok: false, note: 'budget id(s) not found on re-select' };
+  return { ok: true, note: 'set ' + set + ' budget(s)' };
 }
 
 function mark_(data, H, row, status, note) {
