@@ -113,12 +113,14 @@ function main() {
       var micros = Number(row.campaignBudget.amountMicros || 0);
 
       var f = (found[flc] = found[flc] || { budgets: {}, acctName: acctName });
-      if (!f.budgets[bid]) f.budgets[bid] = { cur: micros / 1e6 };
+      if (!f.budgets[bid]) f.budgets[bid] = { cur: micros / 1e6, names: [] };
+      f.budgets[bid].names.push(row.campaign.name);
     }
   }
 
   // apply, franchise by franchise. Budgets are set while the OWNING account is selected.
   var results = [];
+  var changes = [];   // per-budget detail for the email table: {franchise, campaigns, oldAmt, newAmt, capped}
   keys.forEach(function (flc) {
     var p = pending[flc];
     var f = found[flc];
@@ -152,6 +154,13 @@ function main() {
       var applied = applyPlan_(f.acctName, plan);
       if (!applied.ok) { mark_(data, H, p.row, 'failed', applied.note); results.push('X ' + p.label + ' — ' + applied.note); return; }
 
+      // one email-table row per budget (campaigns sharing it are listed together)
+      bids.forEach(function (bid) {
+        var b = f.budgets[bid];
+        var nm = uniq_(b.names).join(', ') + (b.names.length > 1 ? ' · shared' : '');
+        changes.push({ franchise: p.label, campaigns: nm, oldAmt: round2_(b.cur), newAmt: plan[bid], capped: capped });
+      });
+
       var note;
       if (bids.length === 1) {
         note = 'budget ' + round2_(f.budgets[bids[0]].cur) + ' -> ' + plan[bids[0]];
@@ -169,7 +178,7 @@ function main() {
   });
 
   tab.getRange(1, 1, data.length, data[0].length).setValues(data);
-  emailSummary_(results);
+  emailSummary_(results, changes);
   Logger.log(results.join('\n'));
 }
 
@@ -211,11 +220,51 @@ function mark_(data, H, row, status, note) {
 }
 function clamp_(v, lo, hi) { return Math.max(lo, Math.min(hi, Number(v))); }
 function round2_(n) { return Math.round(Number(n) * 100) / 100; }
-function emailSummary_(results) {
+function uniq_(a) { var seen = {}, out = []; a.forEach(function (x) { if (!seen[x]) { seen[x] = 1; out.push(x); } }); return out; }
+function money_(n) { return '$' + Number(n).toFixed(2); }
+function esc_(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function emailSummary_(results, changes) {
   if (!results.length || !EMAIL_TO) return;
   var fails = 0;
   results.forEach(function (s) { if (s.charAt(0) === 'X') fails++; });
   var subj = 'Pacing budget apply' + (DRY_RUN ? ' (DRY RUN)' : '') + ' — ' + (results.length - fails) + ' ok'
            + (fails ? ', ' + fails + ' failed' : '');
-  try { MailApp.sendEmail(EMAIL_TO, subj, results.join('\n')); } catch (e) { Logger.log('email failed: ' + e); }
+
+  // ── HTML: the same campaign-level table you see in the tool ──
+  var rows = (changes || []).map(function (c) {
+    var d = round2_(c.newAmt - c.oldAmt);
+    var dHtml = d === 0 ? '<span style="color:#888">no change</span>'
+      : '<span style="color:' + (d > 0 ? '#1f9d5b' : '#d64535') + '">' + (d > 0 ? '+' : '') + money_(d) + '</span>';
+    return '<tr>'
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee">' + esc_(c.franchise) + '</td>'
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee">' + esc_(c.campaigns) + '</td>'
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">' + money_(c.oldAmt) + '</td>'
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:600">' + money_(c.newAmt) + (c.capped ? ' <span style="color:#c07d12;font-size:11px">(capped)</span>' : '') + '</td>'
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">' + dHtml + '</td>'
+      + '</tr>';
+  }).join('');
+
+  var table = rows
+    ? '<table style="border-collapse:collapse;font:13px Arial,sans-serif;margin:8px 0">'
+      + '<thead><tr style="text-align:left;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.5px">'
+      + '<th style="padding:6px 10px;border-bottom:2px solid #ddd">Franchise</th>'
+      + '<th style="padding:6px 10px;border-bottom:2px solid #ddd">Campaign(s)</th>'
+      + '<th style="padding:6px 10px;border-bottom:2px solid #ddd;text-align:right">Was / day</th>'
+      + '<th style="padding:6px 10px;border-bottom:2px solid #ddd;text-align:right">Now / day</th>'
+      + '<th style="padding:6px 10px;border-bottom:2px solid #ddd;text-align:right">Change</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    : '<p style="font:13px Arial,sans-serif;color:#666">No campaign budgets were changed.</p>';
+
+  var failLines = results.filter(function (s) { return s.charAt(0) === 'X'; });
+  var html = '<div style="font:13px Arial,sans-serif;color:#222">'
+    + '<h2 style="font-size:16px;margin:0 0 4px">Pacing budget apply' + (DRY_RUN ? ' — DRY RUN (nothing changed)' : '') + '</h2>'
+    + '<p style="color:#666;margin:0 0 12px">' + (results.length - fails) + ' applied' + (fails ? ', ' + fails + ' failed' : '') + '.'
+    + (DRY_RUN ? ' <b>DRY_RUN is on</b> — the “Now / day” column is what <i>would</i> be set once you flip DRY_RUN to false.' : '') + '</p>'
+    + table
+    + (failLines.length ? '<p style="color:#d64535;margin-top:12px"><b>Failed:</b><br>' + failLines.map(esc_).join('<br>') + '</p>' : '')
+    + '</div>';
+
+  try { MailApp.sendEmail({ to: EMAIL_TO, subject: subj, htmlBody: html, body: results.join('\n') }); }
+  catch (e) { Logger.log('email failed: ' + e); }
 }
