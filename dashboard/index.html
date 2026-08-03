@@ -943,38 +943,57 @@ function gCampBudgets(){
     (m[k]=m[k]||[]).push({campaign:String(row.Campaign||''), bid:String(row.BudgetId||''), daily:Number(row.DailyBudget)||0, status:String(row.Status||'').toLowerCase()}); });
   return m;
 }
-// Budget & Opportunities section inside the account deep-dive (Google only).
+// Budget section inside the account deep-dive (Google only):
+//   1) PACE — what each campaign's budget is set to vs. what pace suggests (over/under)
+//   2) PERFORMANCE — each campaign's CPL vs the account's blended CPL (a second filter)
 function renderBudget(r){
   const el=document.getElementById('ddBudget'); if(!el) return;
   if(CHANNEL!=='google' || !r.hasBudget){ el.innerHTML=''; return; }
-  const q=queueStatus()[r.k], rec=r.rec, opp=r.opp;
+  const q=queueStatus()[r.k];
   const cur=r.dailyBudget||0, need=Math.round(r.reqDaily||0);
-  // per-campaign current budgets grouped by shared budget id (active campaigns)
-  const camps=(gCampBudgets()[r.k]||[]).filter(c=>c.status==='active');
-  const groups={};
-  camps.forEach(c=>{ (groups[c.bid]=groups[c.bid]||{names:[],daily:c.daily}).names.push(c.campaign||'—'); });
+  const paceState = need<=0 ? '' : cur < need*0.9 ? '<span class="neg">under pace</span>'
+    : cur > need*1.1 ? '<span class="mid">over pace</span>' : '<span class="pos">on pace</span>';
+  const over = (cur>0 && need>0) ? (cur-need)/need : 0;
+
+  // current platform budgets, grouped by shared budget id (active campaigns)
+  const cb=(gCampBudgets()[r.k]||[]).filter(c=>c.status==='active');
+  const groups={}; cb.forEach(c=>{ (groups[c.bid]=groups[c.bid]||{names:[],daily:c.daily}).names.push(c.campaign||'—'); });
   const gids=Object.keys(groups);
   const curTotal=gids.length ? gids.reduce((a,id)=>a+groups[id].daily,0) : cur;
   const factor=(curTotal>0 && need>0) ? need/curTotal : null;
 
-  const action = q&&q.status==='pending' ? '<span class="chip">queued</span>'
-    : q&&q.status==='applied' ? '<span class="chip live">applied</span>'
-    : q&&q.status==='failed' ? `<span class="chip err" title="${esc(q.note)}">failed</span>`
-    : rec ? `<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${rec.newDaily})">Apply → ${money(rec.newDaily)}/day</button>`
-    : '<span class="muted" style="font-size:12px">on target</span>';
+  // per-campaign performance (last 30 days) for the second (performance) layer
+  const days=last_n_days(30), perf={}, camps=r.campaigns||{};
+  Object.keys(camps).forEach(name=>{ let spend=0,conv=0; days.forEach(d=>{const s=camps[name][d]; if(s){spend+=s.spend;conv+=s.conv;}}); perf[name]={spend,conv,cpl:conv?spend/conv:0}; });
+  let bs=0,bc=0; Object.keys(perf).forEach(n=>{bs+=perf[n].spend;bc+=perf[n].conv;}); const blendedCPL=bc?bs/bc:0;
+  const cplOf=names=>{ let s=0,c=0; names.forEach(n=>{const p=perf[n]; if(p){s+=p.spend;c+=p.conv;}}); return c?s/c:0; };
+  const perfTag=cpl=>(cpl&&blendedCPL)?(cpl<=blendedCPL*0.85?'<span class="pos">efficient</span>':cpl>=blendedCPL*1.15?'<span class="neg">costly</span>':'<span class="muted">avg</span>'):'—';
+
+  const chip = q ? (q.status==='pending'?'<span class="chip">queued</span>':q.status==='applied'?'<span class="chip live">applied</span>':q.status==='failed'?`<span class="chip err" title="${esc(q.note)}">failed</span>`:'') : '';
+  const btn = need>0 ? `<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${need})">Apply pace → ${money(need)}/day</button>` : '';
+
+  // rows: prefer platform-budget groups; else fall back to performance-only rows (budget unknown)
+  let src;
+  if(gids.length) src = gids.map(id=>({names:groups[id].names, daily:groups[id].daily}));
+  else src = Object.keys(perf).sort((a,b)=>perf[b].spend-perf[a].spend).map(n=>({names:[n], daily:null}));
+  const body = src.length ? src.map(g=>{
+    const nm=g.names.join(', ')+(g.names.length>1?' · shared':'');
+    const sugg = (g.daily!=null && factor!=null) ? Math.round(g.daily*factor) : null;
+    const d = (sugg!=null) ? sugg-g.daily : null;
+    const cpl=cplOf(g.names);
+    return `<tr><td>${esc(nm)}</td><td>${g.daily!=null?money(g.daily):'—'}</td>`
+      + `<td>${sugg!=null?money(sugg):'—'}${d?` <span class="${d>0?'pos':'neg'}" style="font-size:11px">${d>0?'+':''}${money(d)}</span>`:''}</td>`
+      + `<td>${cpl?money(cpl):'—'}</td><td>${perfTag(cpl)}</td></tr>`;
+  }).join('') : `<tr><td colspan="5" class="muted">No campaign data yet.</td></tr>`;
 
   let html='<div class="recbox" style="margin:12px 0">'
-    + `<div class="rec-h">Budget${rec?` · <span class="${rec.dir==='up'?'pos':'neg'}">${rec.dir==='up'?'▲ under-budgeted':'▼ over-budgeted'}</span>`:''}</div>`
-    + `<div class="rec-row" style="border-top:0"><div class="rec-t">Franchise daily budget <b>${money(cur)}</b> → recommended <b>${need>0?money(need):'—'}</b> <span class="muted">· pacing ${pct(r.pace)}</span></div><div class="rec-a">${action}</div></div>`;
-  if(gids.length && factor){
-    html+='<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current/day</th><th>Recommended/day</th></tr></thead><tbody>'
-      + gids.map(id=>{ const g=groups[id]; const nm=g.names.join(', ')+(g.names.length>1?' · shared':''); return `<tr><td>${esc(nm)}</td><td>${money(g.daily)}</td><td>${money(Math.round(g.daily*factor))}</td></tr>`; }).join('')
-      + '</tbody></table>';
-  } else if(!gids.length){
-    html+='<div class="muted" style="font-size:12px;margin-top:6px">Per-campaign budgets appear here once the updated Google feed script has run.</div>';
-  }
-  if(opp) html+=`<div class="rec-row"><div class="rec-t ${opp.tier==='grow'?'pos':'mid'}">${opp.tier==='grow'?'✨':'⚠️'} ${esc(opp.txt)}</div></div>`;
-  el.innerHTML=html+'</div>';
+    + '<div class="rec-h">Campaign budgets · pace, then performance</div>'
+    + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> set to <b>${money(cur)}</b>/day · pace suggests <b>${need>0?money(need):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
+    + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Set to /day</th><th>Pace-suggested</th><th>CPL 30d</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
+    + (gids.length ? '' : '<div class="muted" style="font-size:11px;margin-top:6px">“Set to” / “Pace-suggested” per campaign appear after the updated Google feed runs (writes the Google_Campaigns tab). CPL and performance show now.</div>')
+    + '<div class="muted" style="font-size:11px;margin-top:6px">Pace-suggested keeps the franchise on its monthly target with the split unchanged. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
+    + '</div>';
+  el.innerHTML=html;
 }
 async function applyRec(btn, label, amount){
   if(!confirm(`Queue a daily-budget change for "${label}" to ${money(amount)}/day?\n\nIt is applied by the hourly Google Ads script (Google only), within safety limits, and you'll get a confirmation email.`)) return;
