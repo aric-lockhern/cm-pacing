@@ -110,6 +110,9 @@
   .ddtbl th:first-child,.ddtbl td:first-child{text-align:left}
   .ddtbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
   .ddtbl tfoot td{font-weight:700;border-bottom:0}
+  .recInput{width:64px;text-align:right;font:inherit;font-variant-numeric:tabular-nums;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+  .recInput:focus{outline:none;border-color:var(--accent)}
+  .recDelta{font-size:11px}
   .trends{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap}
   .trends div{font-size:13px;color:var(--muted)}
   .close{float:right}
@@ -972,33 +975,54 @@ function renderBudget(r){
   const perfTag=cpl=>(cpl&&blendedCPL)?(cpl<=blendedCPL*0.85?'<span class="pos">efficient</span>':cpl>=blendedCPL*1.15?'<span class="neg">costly</span>':'<span class="muted">avg</span>'):'—';
 
   const chip = q ? (q.status==='pending'?'<span class="chip">queued</span>':q.status==='applied'?'<span class="chip live">applied</span>':q.status==='failed'?`<span class="chip err" title="${esc(q.note)}">failed</span>`:'') : '';
-  const btn = need>0 ? `<button class="primary" onclick="applyRec(this,'${jsStr(r.name)}',${need})">Apply pace → ${money(need)}/day</button>` : '';
 
   // rows: prefer platform-budget groups; else fall back to performance-only rows (budget unknown)
   let src;
   if(gids.length) src = gids.map(id=>({names:groups[id].names, daily:groups[id].daily}));
   else src = Object.keys(perf).sort((a,b)=>perf[b].spend-perf[a].spend).map(n=>({names:[n], daily:null}));
+  const editable = gids.length>0;   // per-campaign budgets known → Recommended is editable
   const body = src.length ? src.map(g=>{
     const nm=g.names.join(', ')+(g.names.length>1?' · shared':'');
     const sugg = (g.daily!=null && factor!=null) ? Math.round(g.daily*factor) : null;
-    const d = (sugg!=null) ? sugg-g.daily : null;
     const cpl=cplOf(g.names), leads=leadsOf(g.names), hasPerf=g.names.some(n=>perf[n]);
+    const recCell = (sugg!=null)
+      ? `<input class="recInput" type="number" min="0" step="1" value="${sugg}" data-cur="${g.daily}" oninput="recRecalc('${r.k}')"> <span class="recDelta"></span>`
+      : '—';
     return `<tr><td>${esc(nm)}</td>`
       + `<td>${g.daily!=null?money(g.daily):'—'}</td>`
+      + `<td class="recTd">${recCell}</td>`
       + `<td>${hasPerf?fmtLeads(leads):'—'}</td>`
       + `<td>${cpl?money(cpl):'—'}</td>`
-      + `<td>${sugg!=null?money(sugg):'—'}${d?` <span class="${d>0?'pos':'neg'}" style="font-size:11px">${d>0?'+':''}${money(d)}</span>`:''}</td>`
       + `<td>${perfTag(cpl)}</td></tr>`;
   }).join('') : `<tr><td colspan="6" class="muted">No campaign data yet.</td></tr>`;
 
+  // franchise total the Apply button will queue: sum of the editable rows, else the pace figure
+  const applyTot = editable ? Math.round(gids.reduce((a,id)=>a+(factor!=null?Math.round(groups[id].daily*factor):groups[id].daily),0)) : need;
+  const btn = applyTot>0 ? `<button id="recApplyBtn" class="primary" data-amount="${applyTot}" onclick="applyRec(this,'${jsStr(r.name)}',Number(this.dataset.amount))">Apply → ${money(applyTot)}/day</button>` : '';
+
   let html='<div class="recbox" style="margin:12px 0">'
     + '<div class="rec-h">Campaign budgets · pace, then performance</div>'
-    + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> current cap <b>${money(cur)}</b>/day · recommended <b>${need>0?money(need):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
-    + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current Budget Cap</th><th>Leads 30d</th><th>CPL 30d</th><th>Recommended</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
+    + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> current cap <b>${money(cur)}</b>/day · recommended <b id="recTotal">${applyTot>0?money(applyTot):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
+    + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current Budget Cap</th><th>Recommended</th><th>Leads 30d</th><th>CPL 30d</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
     + (gids.length ? '' : '<div class="muted" style="font-size:11px;margin-top:6px">Per-campaign “Current Budget Cap” / “Recommended” appear after the updated Google feed runs (writes the Google_Campaigns tab). Leads/CPL show now.</div>')
-    + '<div class="muted" style="font-size:11px;margin-top:6px">Recommended keeps the franchise on its monthly target with the split unchanged. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
+    + '<div class="muted" style="font-size:11px;margin-top:6px">Recommended keeps the franchise on its monthly target with the split unchanged. Edit any Recommended box to override — the Apply button queues the new total. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
     + '</div>';
   el.innerHTML=html;
+  recRecalc(r.k);
+}
+// recompute per-row deltas + the franchise total/Apply amount from the editable Recommended boxes
+function recRecalc(k){
+  const el=document.getElementById('ddBudget'); if(!el) return;
+  let tot=0, any=false;
+  el.querySelectorAll('.recInput').forEach(inp=>{
+    const cur=Number(inp.dataset.cur||0), v=Number(inp.value);
+    const badge=inp.parentElement.querySelector('.recDelta');
+    if(!isNaN(v)){ tot+=v; any=true; }
+    if(badge){ const d=(!isNaN(v))?v-cur:0; badge.textContent=(cur&&d)?((d>0?'+':'')+money(d)):''; badge.className='recDelta '+(d>0?'pos':d<0?'neg':''); }
+  });
+  tot=Math.round(tot);
+  const ts=document.getElementById('recTotal'); if(ts && any) ts.textContent=money(tot);
+  const b=document.getElementById('recApplyBtn'); if(b && any){ b.dataset.amount=tot; b.textContent='Apply → '+money(tot)+'/day'; }
 }
 async function applyRec(btn, label, amount){
   if(!confirm(`Queue a daily-budget change for "${label}" to ${money(amount)}/day?\n\nIt is applied by the hourly Google Ads script (Google only), within safety limits, and you'll get a confirmation email.`)) return;
