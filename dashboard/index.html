@@ -113,6 +113,7 @@
   .recInput{width:64px;text-align:right;font:inherit;font-variant-numeric:tabular-nums;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
   .recInput:focus{outline:none;border-color:var(--accent)}
   .recDelta{font-size:11px}
+  button.done{background:var(--good);border-color:var(--good);color:#fff;opacity:1}
   .trends{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap}
   .trends div{font-size:13px;color:var(--muted)}
   .close{float:right}
@@ -1028,8 +1029,8 @@ async function applyRec(btn, label, amount){
   if(!confirm(`Queue a daily-budget change for "${label}" to ${money(amount)}/day?\n\nIt is applied by the hourly Google Ads script (Google only), within safety limits, and you'll get a confirmation email.`)) return;
   if(btn){ btn.disabled=true; btn.textContent='Queuing…'; }
   const res = await call({action:'queueBudget', label, amount, by:LS.name()||''});
-  if(res && res.ok){ load(true); }
-  else { alert('Failed to queue: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; } }
+  if(res && res.ok){ if(btn){ btn.textContent='Queued ✓'; btn.classList.add('done'); } load(true); }
+  else { alert('Failed to queue: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='Apply → '+money(amount)+'/day'; } }
 }
 
 /* ── render ────────────────────────────────────────────────────────── */
