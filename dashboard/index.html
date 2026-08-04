@@ -379,7 +379,7 @@
   <div class="modal">
     <button class="close ghost" onclick="closeMoves()">Close</button>
     <h2>Budget moves</h2>
-    <div class="hint">Log budget shifted <b>between channels</b> for a franchise — e.g. you moved spend from Google into LSA. This <b>never edits the master billing sheet</b> (the client's total bill is unchanged); it just adjusts each channel's pacing target so Google doesn't look under-pacing and LSA over. Amounts are in <b>billed dollars</b> (same as the budget sheet). Scoped to the month you pick. If the new split is permanent, set it directly in next month's budget column.</div>
+    <div class="hint">Log budget shifted <b>between channels</b> for a franchise — e.g. you moved spend from Google into LSA. This <b>never edits the master billing sheet</b> (the client's total bill is unchanged); it just adjusts each channel's pacing target so Google doesn't look under-pacing and LSA over. Amounts are in <b>billed dollars</b> (same as the budget sheet). The move <b>carries forward</b> from its month and <b>depletes as the destination spends through it</b> — once the moved amount is spent, targets revert to the sheet automatically (see <b>Remaining</b> below). Void a row to cancel it early.</div>
 
     <div class="moverow">
       <div><label>Franchise</label><input id="mvFranchise" list="mvFranchiseList" placeholder="Fetch - Fort Myers"><datalist id="mvFranchiseList"></datalist></div>
@@ -484,6 +484,7 @@ function execData(targetMonth){
     {key:'meta',   label:'Facebook',          fee:Number(CFG.metaFee)||0,   platform:'Meta',   daily:DATA.metaDaily||[]}
   ];
   const monthly = {};   // 'YYYY-MM' -> {google,lsa,meta}  (whole-year trend for the chart)
+  const emNet = moveNetMap(isCurrent ? asof : lastDayIso(targetMonth));   // carryover remaining as of this month
   const channels = CHS.map(ch=>{
     const billed = {};
     (DATA.budgets||[]).forEach(r=>{
@@ -492,14 +493,12 @@ function execData(targetMonth){
       const b = brandOf(r.Label);
       billed[b] = (billed[b]||0) + (Number(r['Total Budget'])||0);
     });
-    // apply channel reallocations for this month (zero-sum across channels; top rollup unchanged)
-    (DATA.budgetMoves||[]).forEach(r=>{
-      if(String(r.Void).trim().toLowerCase()==='true') return;
-      if(String(r.Month).trim()!==targetMonth) return;
-      const amt = Number(r.Amount)||0; if(!amt) return;
-      const b = brandOf(r.Franchise);
-      if(key(r.To)===key(ch.platform))   billed[b] = (billed[b]||0) + amt;
-      if(key(r.From)===key(ch.platform)) billed[b] = (billed[b]||0) - amt;
+    // apply channel reallocations — net remaining carryover as of this month
+    // (zero-sum across channels; top rollup unchanged)
+    Object.keys(emNet).forEach(fk=>{
+      const v = emNet[fk].d[key(ch.platform)]; if(!v) return;
+      const b = brandOf(emNet[fk].name);
+      billed[b] = (billed[b]||0) + v;
     });
     const spendM = {}, spendY = {};
     (ch.daily).forEach(r=>{
@@ -763,6 +762,52 @@ function channelCfg(){
   return                      { platform:'Google', fee:Number(CFG.googleFee)||0,mode:'monthly',  budgetMonth:MONTH, feedRows:DATA.google||[],dailyRows:DATA.dailyG||[],    dailyCols:['Spend','Clicks','Conv','Revenue'], hasBudgets:true };
 }
 
+/* ── budget-move carryover ───────────────────────────────────────────────
+   A move carries forward month-to-month and DEPLETES as the destination
+   channel spends through it: the moved amount is a pool, drawn down by the
+   destination's billed-equivalent spend that exceeds its own base budget
+   since the move. Once exhausted, targets revert to the sheet. */
+function channelDaily_(platform){
+  const p = key(platform);
+  if(p==='google') return { rows:DATA.dailyG||[],   fee:Number(CFG.googleFee)||0 };
+  if(p==='lsa')    return { rows:DATA.dailyLsa||[], fee:Number(CFG.lsaFee)||0 };
+  if(p==='meta')   return { rows:DATA.metaDaily||[],fee:Number(CFG.metaFee)||0 };
+  return { rows:[], fee:0 };
+}
+function moveRemaining(mv, asOfIso){
+  const moved = Number(mv.Amount)||0; if(moved<=0) return 0;
+  const mo = String(mv.Month).trim(); if(!/^\d{4}-\d{2}$/.test(mo)) return 0;
+  const startIso = mo+'-01';
+  if(asOfIso < startIso) return 0;                      // not started yet
+  const asOfMonth = asOfIso.slice(0,7);
+  const dest = channelDaily_(mv.To), destFee1 = 1-dest.fee, frK = key(mv.Franchise);
+  // destination billed-equivalent spend since the move
+  let spendBilled = 0;
+  dest.rows.forEach(r=>{ if(key(r.Label)!==frK) return; const d=String(r.Date).slice(0,10);
+    if(d>=startIso && d<=asOfIso){ const sp=Number(r.Spend)||0; spendBilled += destFee1>0? sp/destFee1 : sp; } });
+  // destination base budget (billed) from the move month through the as-of month
+  let baseBudget = 0;
+  (DATA.budgets||[]).forEach(r=>{ if(key(r.Platform)!==key(mv.To) || key(r.Label)!==frK) return;
+    const m=String(r.Month).trim(); if(!/^\d{4}-\d{2}$/.test(m)) return;
+    if(m>=mo && m<=asOfMonth) baseBudget += Number(r['Total Budget'])||0; });
+  const overspend = Math.max(0, spendBilled - baseBudget);
+  return Math.max(0, Math.min(moved, moved - overspend));   // pool left after drawdown
+}
+// franchiseKey -> { name, d:{google,lsa,meta} } net remaining reallocation as of a date
+function moveNetMap(asOfIso){
+  const map = {};
+  (DATA.budgetMoves||[]).forEach(mv=>{
+    if(String(mv.Void).trim().toLowerCase()==='true') return;
+    const rem = moveRemaining(mv, asOfIso); if(rem<=0) return;
+    const k = key(mv.Franchise);
+    const e = map[k] = map[k] || { name:String(mv.Franchise).trim(), d:{} };
+    const to = key(mv.To), from = key(mv.From);
+    e.d[to]   = (e.d[to]||0)   + rem;
+    e.d[from] = (e.d[from]||0) - rem;
+  });
+  return map;
+}
+
 function build(){
   const CH = channelCfg();
   const fee1 = 1 - CH.fee;
@@ -814,22 +859,12 @@ function build(){
   const lsaWinTotalDays = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), e=new Date(now.getFullYear(), now.getMonth()+1, 0); return Math.round((e-s)/864e5)+1; })();
   const lsaWinElapsed = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), a=new Date(asofIso+'T00:00:00'); return Math.max(0, Math.round((a-s)/864e5)+1); })();
 
-  // channel reallocations (Budget_Moves): net gross delta per franchise for THIS channel.
+  // channel reallocations (Budget_Moves): net REMAINING carryover per franchise for
+  // THIS channel — a move carries forward until the destination spends through it.
   // Zero-sum on the franchise total — the master billing sheet is never edited.
-  const lsaWinStartMo = lsaWinStart.slice(0,7);
+  const netMap = moveNetMap(asofIso);
   const moveAdj = {};
-  (DATA.budgetMoves||[]).forEach(r=>{
-    if(String(r.Void).trim().toLowerCase()==='true') return;
-    const mo = String(r.Month).trim();
-    const inScope = CHANNEL==='lsa'
-      ? (mo>=lsaWinStartMo && mo<=MONTH)   // LSA pool spans the burn-down window
-      : (mo===CH.budgetMonth);             // Google/Meta: the calendar month
-    if(!inScope) return;
-    const amt = Number(r.Amount)||0; if(!amt) return;
-    const k = key(r.Franchise);
-    if(key(r.To)===key(CH.platform))   moveAdj[k] = (moveAdj[k]||0) + amt;
-    if(key(r.From)===key(CH.platform)) moveAdj[k] = (moveAdj[k]||0) - amt;
-  });
+  Object.keys(netMap).forEach(k=>{ const v = netMap[k].d[key(CH.platform)]; if(v) moveAdj[k] = v; });
 
   const labels = new Set();
   Object.keys(bud).forEach(k=>{ if(!k.startsWith('__disp__')) labels.add(k); });
@@ -1444,7 +1479,7 @@ function openDD(k){
       <div class="c"><div class="l">Daily Target</div><div class="v">${money(r.dailyTarget*gfx(r))}</div></div>
       <div class="c"><div class="l">Pace</div><div class="v ${r.pace>1.05?'neg':r.pace<0.9?'mid':'pos'}">${pct(r.pace)}</div></div>
     </div>
-    ${r.moved ? `<div class="hint" style="margin:6px 0 0">Target adjusted by a <b>budget move</b>: ${r.moved>0?'+':''}${money(r.moved)} ${r.moved>0?'into':'out of'} ${CHANNEL==='google'?'Google':CHANNEL==='lsa'?'LSA':'Meta'} this ${CHANNEL==='lsa'?'window':'month'} (billing sheet unchanged). <a href="#" onclick="closeDD();openMoves();return false">View / edit moves</a></div>` : ''}
+    ${r.moved ? `<div class="hint" style="margin:6px 0 0">Target adjusted by a <b>budget move carryover</b>: ${r.moved>0?'+':''}${money(r.moved)} ${r.moved>0?'into':'out of'} ${CHANNEL==='google'?'Google':CHANNEL==='lsa'?'LSA':'Meta'} remaining (billing sheet unchanged; depletes as it's spent). <a href="#" onclick="closeDD();openMoves();return false">View / edit moves</a></div>` : ''}
     <div id="ddBudget"></div>
     <div class="ddctrls">
       <div class="seg" id="ddMetric"></div>
@@ -1732,19 +1767,26 @@ function renderMovesLedger(){
   const rows=(DATA&&DATA.budgetMoves||[]).slice()
     .sort((a,b)=> String(b.Month).localeCompare(String(a.Month)) || String(b.Timestamp).localeCompare(String(a.Timestamp)));
   if(!rows.length){ el.innerHTML='<div class="muted" style="font-size:13px">No moves logged yet.</div>'; return; }
+  const todayIso = isoLocal(ASOF);
   const body=rows.map(r=>{
     const voided=String(r.Void).trim().toLowerCase()==='true';
+    const amt=Number(r.Amount)||0;
+    const rem=voided?0:moveRemaining(r, todayIso);
+    const remCell = voided ? '<span class="muted">—</span>'
+      : rem<=0.5 ? '<span class="pos">exhausted</span>'
+      : `${money(rem)} <span class="muted" style="font-size:11px">of ${money(amt)}</span>`;
     return `<tr class="${voided?'voided':''}">`
       + `<td>${esc(monthLabel(String(r.Month).trim()))}</td>`
       + `<td>${esc(r.Franchise)}</td>`
       + `<td>${esc(r.From)} → ${esc(r.To)}</td>`
-      + `<td class="num">${money(Number(r.Amount)||0)}</td>`
+      + `<td class="num">${money(amt)}</td>`
+      + `<td class="num">${remCell}</td>`
       + `<td>${esc(r.By||'')}</td>`
       + `<td>${esc(r.Note||'')}</td>`
       + `<td>${voided?'<span class="muted">voided</span>':`<button class="voidbtn" title="Void this move" onclick="voidMoveRow('${esc(String(r.Id))}')">✕ void</button>`}</td>`
       + `</tr>`;
   }).join('');
-  el.innerHTML=`<table class="mvtbl"><thead><tr><th>Month</th><th>Franchise</th><th>Move</th><th class="num">Amount</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+  el.innerHTML=`<table class="mvtbl"><thead><tr><th>Month</th><th>Franchise</th><th>Move</th><th class="num">Amount</th><th class="num">Remaining</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
 }
 async function saveSettings(){
   // personal

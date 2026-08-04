@@ -54,17 +54,24 @@ change) and untrackable. Instead, **Budget moves** (header button) logs each
 shift to a `Budget_Moves` tab and the app applies it *on top of* the synced
 budgets:
 
-- The move is `from` one channel `to` another, in **billed dollars**, scoped to
-  a **month** — it's zero-sum, so the franchise's total budget is unchanged.
+- The move is `from` one channel `to` another, in **billed dollars**, starting
+  in the **month** you pick — it's zero-sum, so the franchise's total budget is
+  unchanged.
 - Google's pacing target drops and LSA's rises by the moved amount, so neither
   looks falsely over-/under-pacing. The `Budgets` tab (from the master sheet) is
   never touched.
+- **Carryover / depletion.** A move **carries forward** month-to-month and is
+  treated as a pool that **depletes as the destination channel spends through
+  it** — specifically, the destination's billed-equivalent spend that exceeds
+  its own base budget since the move draws the pool down. When the pool hits
+  zero, the adjustment disappears and both channels revert to the sheet. The
+  ledger shows each move's **Remaining** (or `exhausted`).
 - Every move is one auditable row (id, who, when, from→to, amount, note) and is
   **reversible** — void it and targets revert. The deep-dive shows a note when a
-  target was adjusted by a move.
-- LSA moves apply across the burn-down pool window; Google/Meta apply to the
-  calendar month. If a new split is permanent, set it directly in next month's
-  budget column instead of logging a recurring move.
+  target is currently adjusted by a carryover.
+- Depletion is computed in the app from spend + budgets (the gateway just stores
+  the ledger). If a new split is permanent, set it directly in next month's
+  budget column instead of logging a move.
 
 ## Setup
 
