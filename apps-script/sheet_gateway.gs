@@ -679,7 +679,10 @@ function logMove_(p) {
   var tab = ss.getSheetByName(TABS.budgetMoves.name) || ss.insertSheet(TABS.budgetMoves.name);
   ensureHeader_(tab, TABS.budgetMoves);
   var id = 'mv' + (new Date()).getTime();
+  var row = tab.getLastRow() + 1;
   tab.appendRow([id, new Date(), month, fr, from, to, round2_(amt), String((p && p.by) || ''), String((p && p.note) || ''), '']);
+  // Month is column 3 — force it to plain text so Sheets doesn't coerce '2026-08' into a date.
+  tab.getRange(row, 3).setNumberFormat('@').setValue(month);
   bustCache_();
   return { ok: true, id: id };
 }

@@ -774,9 +774,11 @@ function channelDaily_(platform){
   if(p==='meta')   return { rows:DATA.metaDaily||[],fee:Number(CFG.metaFee)||0 };
   return { rows:[], fee:0 };
 }
+// pull 'YYYY-MM' out of a month cell whether it's '2026-08' or a date Sheets coerced it into
+function mvYm(v){ const m = String(v||'').trim().match(/(\d{4})-(\d{2})/); return m ? m[1]+'-'+m[2] : ''; }
 function moveRemaining(mv, asOfIso){
   const moved = Number(mv.Amount)||0; if(moved<=0) return 0;
-  const mo = String(mv.Month).trim(); if(!/^\d{4}-\d{2}$/.test(mo)) return 0;
+  const mo = mvYm(mv.Month); if(!mo) return 0;
   const startIso = mo+'-01';
   if(asOfIso < startIso) return 0;                      // not started yet
   const asOfMonth = asOfIso.slice(0,7);
@@ -1765,7 +1767,7 @@ async function voidMoveRow(id){
 function renderMovesLedger(){
   const el=document.getElementById('movesLedger'); if(!el) return;
   const rows=(DATA&&DATA.budgetMoves||[]).slice()
-    .sort((a,b)=> String(b.Month).localeCompare(String(a.Month)) || String(b.Timestamp).localeCompare(String(a.Timestamp)));
+    .sort((a,b)=> mvYm(b.Month).localeCompare(mvYm(a.Month)) || String(b.Timestamp).localeCompare(String(a.Timestamp)));
   if(!rows.length){ el.innerHTML='<div class="muted" style="font-size:13px">No moves logged yet.</div>'; return; }
   const todayIso = isoLocal(ASOF);
   const body=rows.map(r=>{
@@ -1775,8 +1777,9 @@ function renderMovesLedger(){
     const remCell = voided ? '<span class="muted">—</span>'
       : rem<=0.5 ? '<span class="pos">exhausted</span>'
       : `${money(rem)} <span class="muted" style="font-size:11px">of ${money(amt)}</span>`;
+    const ymv=mvYm(r.Month);
     return `<tr class="${voided?'voided':''}">`
-      + `<td>${esc(monthLabel(String(r.Month).trim()))}</td>`
+      + `<td>${ymv?esc(monthLabel(ymv)):'<span class="muted">—</span>'}</td>`
       + `<td>${esc(r.Franchise)}</td>`
       + `<td>${esc(r.From)} → ${esc(r.To)}</td>`
       + `<td class="num">${money(amt)}</td>`
