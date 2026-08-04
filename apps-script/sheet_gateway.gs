@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-03';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-04';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -31,6 +31,7 @@ var TABS = {
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
+  budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
   groups:     { name: 'Groups',        header: ['Label','Group','Hidden','Type','Manager','Updated'] },
   dismissals: { name: 'Dismissals',    header: ['Label','Until','Updated'] },
   team:       { name: 'Team',          header: ['Name','SlackID'] },
@@ -75,6 +76,8 @@ function doGet(e) {
       case 'syncMeta':     out = syncMeta_(p); break;
       case 'metaPreview':  out = metaPreview_(p.url, p.tab, p.range); break;
       case 'queueBudget':  out = queueBudget_(p); break;
+      case 'logMove':      out = logMove_(p); break;
+      case 'voidMove':     out = voidMove_(p); break;
       case 'setType':    out = setGroupField_(p.label, 'Type', p.value); break;
       case 'setManager': out = setGroupField_(p.label, 'Manager', p.value); break;
       case 'setHidden':  out = setGroupField_(p.label, 'Hidden', p.value); break;
@@ -225,6 +228,7 @@ function getDataString_(force) {
     metaDaily:  readTab_(ss, TABS.metaDaily),
     metaFeed:   readTab_(ss, TABS.metaFeed),
     budgetQueue:readTab_(ss, TABS.budgetQueue),
+    budgetMoves:readTab_(ss, TABS.budgetMoves),
     budgets:    readTab_(ss, TABS.budgets),
     budgetLog:  readTab_(ss, TABS.budgetLog),
     groups:     readTab_(ss, TABS.groups),
@@ -652,6 +656,51 @@ function queueBudget_(p) {
   tab.appendRow([new Date(), label, round2_(amt), String((p && p.by) || ''), 'pending', '', '']);
   bustCache_();
   return { ok: true };
+}
+
+/* ── budget moves (channel reallocation ledger) ──────────────────────────────
+ * A move records that $Amount of a franchise's monthly budget was shifted from
+ * one channel to another (e.g. Google → LSA). It NEVER edits the master billing
+ * sheet — the client's total bill is unchanged. The app applies the net move on
+ * top of the synced budgets so per-channel pacing reflects reality. Reversible
+ * by voiding the row. */
+function logMove_(p) {
+  var month = String((p && p.month) || '').trim();
+  var fr = String((p && p.franchise) || '').trim();
+  var from = String((p && p.from) || '').trim();
+  var to = String((p && p.to) || '').trim();
+  var amt = Number(p && p.amount);
+  if (!/^\d{4}-\d{2}$/.test(month)) return { ok: false, error: 'bad month (YYYY-MM)' };
+  if (!fr) return { ok: false, error: 'no franchise' };
+  if (!from || !to) return { ok: false, error: 'need from + to channel' };
+  if (from.toLowerCase() === to.toLowerCase()) return { ok: false, error: 'from and to are the same channel' };
+  if (isNaN(amt) || amt <= 0) return { ok: false, error: 'bad amount' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetMoves.name) || ss.insertSheet(TABS.budgetMoves.name);
+  ensureHeader_(tab, TABS.budgetMoves);
+  var id = 'mv' + (new Date()).getTime();
+  tab.appendRow([id, new Date(), month, fr, from, to, round2_(amt), String((p && p.by) || ''), String((p && p.note) || ''), '']);
+  bustCache_();
+  return { ok: true, id: id };
+}
+
+function voidMove_(p) {
+  var id = String((p && p.id) || '').trim();
+  if (!id) return { ok: false, error: 'no id' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetMoves.name);
+  if (!tab) return { ok: false, error: 'no moves tab' };
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][h.Id]).trim() === id) {
+      vals[i][h.Void] = 'TRUE';
+      tab.getRange(i + 1, h.Void + 1).setValue('TRUE');
+      bustCache_();
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'id not found' };
 }
 
 /* ── budget sync from a linked sheet (column-mapped) ─────────────────────── */

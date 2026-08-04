@@ -33,7 +33,7 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 
 | Path | What it is |
 |------|-----------|
-| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Exec** tab — an all-channel summary rolled up to Account/brand, month + YTD, with a spend chart. |
+| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Exec** tab — an all-channel summary rolled up to Account/brand, month + YTD, with a spend chart — and **Budget moves**, a channel-reallocation ledger. |
 | `apps-script/sheet_gateway.gs` | Apps Script **web app** — the JSONP gateway, Slack poster, and budget sync. |
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |
@@ -44,6 +44,27 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 > `Meta_Daily` — configured under **Settings ▸ Meta / Facebook import**. The
 > franchise is the campaign **tag**; untagged campaigns are skipped. It rewrites
 > `Meta_Daily` on each sync (rolling window) and auto-syncs once a day.
+
+## Budget moves (channel reallocation)
+
+Sometimes you shift a franchise's budget **between channels** mid-month — e.g.
+move spend from Google Ads into LSA — without changing what the client is
+billed. Editing the master billing sheet would be wrong (the invoice didn't
+change) and untrackable. Instead, **Budget moves** (header button) logs each
+shift to a `Budget_Moves` tab and the app applies it *on top of* the synced
+budgets:
+
+- The move is `from` one channel `to` another, in **billed dollars**, scoped to
+  a **month** — it's zero-sum, so the franchise's total budget is unchanged.
+- Google's pacing target drops and LSA's rises by the moved amount, so neither
+  looks falsely over-/under-pacing. The `Budgets` tab (from the master sheet) is
+  never touched.
+- Every move is one auditable row (id, who, when, from→to, amount, note) and is
+  **reversible** — void it and targets revert. The deep-dive shows a note when a
+  target was adjusted by a move.
+- LSA moves apply across the burn-down pool window; Google/Meta apply to the
+  calendar month. If a new split is permanent, set it directly in next month's
+  budget column instead of logging a recurring move.
 
 ## Setup
 

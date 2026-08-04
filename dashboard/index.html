@@ -121,6 +121,16 @@
   .settings-row label{width:150px;color:var(--muted);font-size:13px}
   .settings-row input{flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 9px}
   .hint{font-size:12px;color:var(--faint);margin:2px 0 12px}
+  .moverow{display:flex;gap:12px;align-items:flex-end;margin:10px 0;flex-wrap:wrap}
+  .moverow>div{display:flex;flex-direction:column;gap:4px}
+  .moverow label{color:var(--muted);font-size:12px}
+  .moverow input,.moverow select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 9px;min-width:150px}
+  .mvtbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+  .mvtbl th,.mvtbl td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:left}
+  .mvtbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
+  .mvtbl td.num{text-align:right}
+  .mvtbl .voidbtn{cursor:pointer;color:var(--bad);border:none;background:none;font-size:13px}
+  .mvtbl tr.voided td{opacity:.45;text-decoration:line-through}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
 
   /* overview / exec view */
@@ -206,6 +216,7 @@
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
+  <button class="ghost" onclick="openMoves()" title="Log a budget move between channels (e.g. Google → LSA) without editing the master sheet">Budget moves</button>
   <button class="ghost" onclick="openSettings()">Settings</button>
   <button class="ghost" onclick="load(true)">Refresh</button>
 </header>
@@ -363,6 +374,33 @@
   </div>
 </div>
 
+<!-- budget moves (channel reallocation ledger) -->
+<div class="scrim" id="movesScrim" onclick="if(event.target===this)closeMoves()">
+  <div class="modal">
+    <button class="close ghost" onclick="closeMoves()">Close</button>
+    <h2>Budget moves</h2>
+    <div class="hint">Log budget shifted <b>between channels</b> for a franchise — e.g. you moved spend from Google into LSA. This <b>never edits the master billing sheet</b> (the client's total bill is unchanged); it just adjusts each channel's pacing target so Google doesn't look under-pacing and LSA over. Amounts are in <b>billed dollars</b> (same as the budget sheet). Scoped to the month you pick. If the new split is permanent, set it directly in next month's budget column.</div>
+
+    <div class="moverow">
+      <div><label>Franchise</label><input id="mvFranchise" list="mvFranchiseList" placeholder="Fetch - Fort Myers"><datalist id="mvFranchiseList"></datalist></div>
+      <div><label>Month</label><input id="mvMonth" type="month"></div>
+    </div>
+    <div class="moverow">
+      <div><label>From</label><select id="mvFrom"><option>Google</option><option>LSA</option><option>Meta</option></select></div>
+      <div><label>To</label><select id="mvTo"><option>LSA</option><option>Google</option><option>Meta</option></select></div>
+      <div><label>Amount ($)</label><input id="mvAmount" type="number" min="0" step="1" placeholder="500"></div>
+    </div>
+    <div class="moverow"><div style="flex:1"><label>Note (optional)</label><input id="mvNote" placeholder="why / who approved"></div></div>
+    <div class="settings-row" style="margin-top:6px"><label></label>
+      <button class="primary" onclick="submitMove()">Log move</button>
+      <span id="mvMsg" class="muted" style="flex:1"></span>
+    </div>
+
+    <h3 style="margin:16px 0 4px">Ledger</h3>
+    <div id="movesLedger"></div>
+  </div>
+</div>
+
 <script>
 /* ═══════════════ CONFIG — replace these two per agency ═══════════════ */
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
@@ -453,6 +491,15 @@ function execData(targetMonth){
       if(String(r.Month).trim()!==targetMonth) return;         // this month's billed (LSA now writes a monthly row)
       const b = brandOf(r.Label);
       billed[b] = (billed[b]||0) + (Number(r['Total Budget'])||0);
+    });
+    // apply channel reallocations for this month (zero-sum across channels; top rollup unchanged)
+    (DATA.budgetMoves||[]).forEach(r=>{
+      if(String(r.Void).trim().toLowerCase()==='true') return;
+      if(String(r.Month).trim()!==targetMonth) return;
+      const amt = Number(r.Amount)||0; if(!amt) return;
+      const b = brandOf(r.Franchise);
+      if(key(r.To)===key(ch.platform))   billed[b] = (billed[b]||0) + amt;
+      if(key(r.From)===key(ch.platform)) billed[b] = (billed[b]||0) - amt;
     });
     const spendM = {}, spendY = {};
     (ch.daily).forEach(r=>{
@@ -767,8 +814,26 @@ function build(){
   const lsaWinTotalDays = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), e=new Date(now.getFullYear(), now.getMonth()+1, 0); return Math.round((e-s)/864e5)+1; })();
   const lsaWinElapsed = (()=>{ const s=new Date(lsaWinStart+'T00:00:00'), a=new Date(asofIso+'T00:00:00'); return Math.max(0, Math.round((a-s)/864e5)+1); })();
 
+  // channel reallocations (Budget_Moves): net gross delta per franchise for THIS channel.
+  // Zero-sum on the franchise total — the master billing sheet is never edited.
+  const lsaWinStartMo = lsaWinStart.slice(0,7);
+  const moveAdj = {};
+  (DATA.budgetMoves||[]).forEach(r=>{
+    if(String(r.Void).trim().toLowerCase()==='true') return;
+    const mo = String(r.Month).trim();
+    const inScope = CHANNEL==='lsa'
+      ? (mo>=lsaWinStartMo && mo<=MONTH)   // LSA pool spans the burn-down window
+      : (mo===CH.budgetMonth);             // Google/Meta: the calendar month
+    if(!inScope) return;
+    const amt = Number(r.Amount)||0; if(!amt) return;
+    const k = key(r.Franchise);
+    if(key(r.To)===key(CH.platform))   moveAdj[k] = (moveAdj[k]||0) + amt;
+    if(key(r.From)===key(CH.platform)) moveAdj[k] = (moveAdj[k]||0) - amt;
+  });
+
   const labels = new Set();
   Object.keys(bud).forEach(k=>{ if(!k.startsWith('__disp__')) labels.add(k); });
+  Object.keys(moveAdj).forEach(k=>labels.add(k));   // a franchise moved-into this channel may have no base budget row
   Object.keys(feed).forEach(k=>labels.add(k));
   Object.keys(dailyByLabel).forEach(k=>labels.add(k));
   (DATA.groups||[]).forEach(r=>labels.add(key(r.Label)));
@@ -779,7 +844,8 @@ function build(){
     const meta = G[k] && G[k][0] || {};
     const disp = bud['__disp__'+k] || meta.Label || feedName(CH,k) || titleize(k);
     const series = dailyByLabel[k] || {};
-    const gross = bud[k] || 0;
+    const moved = moveAdj[k] || 0;                       // net channel reallocation for this franchise
+    const gross = Math.max(0, (bud[k] || 0) + moved);    // billed budget adjusted by moves (sheet untouched)
     const adTarget = gross * fee1;
     const feeAmt = gross - adTarget;
     const hasFeed = feed.hasOwnProperty(k);
@@ -826,7 +892,7 @@ function build(){
     MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
       projected, onTarget, pace, delta,
       conv, cpa, rev, roas, type, hidden, live, dailyBudget:f.dailyBudget||0, reqDaily,
-      hasBudget:gross>0, dailyTarget, series, alert, corrected,
+      hasBudget:gross>0, dailyTarget, series, alert, corrected, moved,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
   });
   MODEL.forEach(r=>{ r.rec = budgetRec(r); r.opp = budgetOpp(r); });   // Google budget recs / opportunities
@@ -1378,6 +1444,7 @@ function openDD(k){
       <div class="c"><div class="l">Daily Target</div><div class="v">${money(r.dailyTarget*gfx(r))}</div></div>
       <div class="c"><div class="l">Pace</div><div class="v ${r.pace>1.05?'neg':r.pace<0.9?'mid':'pos'}">${pct(r.pace)}</div></div>
     </div>
+    ${r.moved ? `<div class="hint" style="margin:6px 0 0">Target adjusted by a <b>budget move</b>: ${r.moved>0?'+':''}${money(r.moved)} ${r.moved>0?'into':'out of'} ${CHANNEL==='google'?'Google':CHANNEL==='lsa'?'LSA':'Meta'} this ${CHANNEL==='lsa'?'window':'month'} (billing sheet unchanged). <a href="#" onclick="closeDD();openMoves();return false">View / edit moves</a></div>` : ''}
     <div id="ddBudget"></div>
     <div class="ddctrls">
       <div class="seg" id="ddMetric"></div>
@@ -1625,6 +1692,60 @@ function openSettings(){
   document.getElementById('setScrim').classList.add('on');
 }
 function closeSettings(){ document.getElementById('setScrim').classList.remove('on'); }
+
+/* ── budget moves (channel reallocation) ─────────────────────────────── */
+function openMoves(){
+  // franchise suggestions from every channel's budget rows
+  const seen=new Set(), opts=[];
+  (DATA&&DATA.budgets||[]).forEach(r=>{ const n=String(r.Label||'').trim(); const k=key(n);
+    if(!n || seen.has(k) || IGNORE_FRANCHISES.has(k)) return; seen.add(k); opts.push(n); });
+  opts.sort((a,b)=>a.localeCompare(b));
+  document.getElementById('mvFranchiseList').innerHTML = opts.map(n=>`<option value="${esc(n)}">`).join('');
+  const mm=document.getElementById('mvMonth'); if(!mm.value) mm.value = MONTH;
+  document.getElementById('mvMsg').textContent='';
+  renderMovesLedger();
+  document.getElementById('movesScrim').classList.add('on');
+}
+function closeMoves(){ document.getElementById('movesScrim').classList.remove('on'); }
+async function submitMove(){
+  const franchise=val('mvFranchise').trim(), month=val('mvMonth').trim();
+  const from=val('mvFrom'), to=val('mvTo'), amount=Number(val('mvAmount')), note=val('mvNote').trim();
+  const msg=document.getElementById('mvMsg');
+  if(!franchise){ msg.textContent='Pick a franchise.'; return; }
+  if(!/^\d{4}-\d{2}$/.test(month)){ msg.textContent='Pick a month.'; return; }
+  if(from===to){ msg.textContent='From and To must differ.'; return; }
+  if(!(amount>0)){ msg.textContent='Enter an amount.'; return; }
+  msg.textContent='Saving…';
+  const res=await call({action:'logMove', month, franchise, from, to, amount, note, by:LS.name()||''});
+  if(res && res.ok){ msg.textContent='Logged.'; document.getElementById('mvAmount').value=''; document.getElementById('mvNote').value='';
+    await load(true); renderMovesLedger(); }
+  else msg.textContent='Failed: '+((res&&res.error)||'?');
+}
+async function voidMoveRow(id){
+  if(!confirm('Void this budget move? Pacing targets revert as if it never happened.')) return;
+  const res=await call({action:'voidMove', id});
+  if(res && res.ok){ await load(true); renderMovesLedger(); }
+  else alert('Failed to void: '+((res&&res.error)||'?'));
+}
+function renderMovesLedger(){
+  const el=document.getElementById('movesLedger'); if(!el) return;
+  const rows=(DATA&&DATA.budgetMoves||[]).slice()
+    .sort((a,b)=> String(b.Month).localeCompare(String(a.Month)) || String(b.Timestamp).localeCompare(String(a.Timestamp)));
+  if(!rows.length){ el.innerHTML='<div class="muted" style="font-size:13px">No moves logged yet.</div>'; return; }
+  const body=rows.map(r=>{
+    const voided=String(r.Void).trim().toLowerCase()==='true';
+    return `<tr class="${voided?'voided':''}">`
+      + `<td>${esc(monthLabel(String(r.Month).trim()))}</td>`
+      + `<td>${esc(r.Franchise)}</td>`
+      + `<td>${esc(r.From)} → ${esc(r.To)}</td>`
+      + `<td class="num">${money(Number(r.Amount)||0)}</td>`
+      + `<td>${esc(r.By||'')}</td>`
+      + `<td>${esc(r.Note||'')}</td>`
+      + `<td>${voided?'<span class="muted">voided</span>':`<button class="voidbtn" title="Void this move" onclick="voidMoveRow('${esc(String(r.Id))}')">✕ void</button>`}</td>`
+      + `</tr>`;
+  }).join('');
+  el.innerHTML=`<table class="mvtbl"><thead><tr><th>Month</th><th>Franchise</th><th>Move</th><th class="num">Amount</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+}
 async function saveSettings(){
   // personal
   const name=val('setName'), url=val('setUrl'), secret=val('setSecret');
