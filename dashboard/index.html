@@ -674,19 +674,30 @@ function call(params){
 async function load(fresh){
   setStatus('loading','loading…');
   PREFETCHED = false;
-  try{
-    const d = await call(fresh ? {action:'data', fresh:'1'} : {action:'data'});
-    if(!d || d.ok===false) throw new Error(d && d.error || 'no data');
-    DATA = d;
-    CFG = Object.assign(CFG, d.config||{});
-    build();
-    setStatus('live','Live');
-    render();
-    if(EXEC) showExec();                                              // re-render exec with fresh data
-    else if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
-  }catch(e){
-    setStatus('err','Offline — check Settings');
-    console.error(e);
+  // Apps Script cold-starts: the first request after idle can fail transiently,
+  // then works on refresh. Retry a few times with backoff before saying Offline.
+  const attempts = 4, waits = [800, 1600, 3000];
+  for(let i=0;i<attempts;i++){
+    try{
+      const d = await call(fresh ? {action:'data', fresh:'1'} : {action:'data'});
+      if(!d || d.ok===false) throw new Error(d && d.error || 'no data');
+      DATA = d;
+      CFG = Object.assign(CFG, d.config||{});
+      build();
+      setStatus('live','Live');
+      render();
+      if(EXEC) showExec();                                              // re-render exec with fresh data
+      else if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
+      return;
+    }catch(e){
+      console.error('load attempt '+(i+1)+' failed:', e);
+      if(i < attempts-1){
+        setStatus('loading','connecting…');
+        await new Promise(r=>setTimeout(r, waits[i] || 3000));
+      }else{
+        setStatus('err','Offline — check Settings');
+      }
+    }
   }
 }
 
