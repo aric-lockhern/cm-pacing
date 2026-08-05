@@ -30,6 +30,7 @@
  * ── CONFIG ─────────────────────────────────────────────────────────────── */
 var SPREADSHEET_URL   = 'https://docs.google.com/spreadsheets/d/16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE/edit';
 var QUEUE_TAB         = 'Budget_Queue';
+var CAMPQ_TAB         = 'Campaign_Queue';                  // pause/activate requests from the app
 var ACCOUNT_LABEL     = 'Active';                          // only process accounts carrying this label
 var IGNORE_LABELS     = ['Active', 'Paused', 'DoNotTouch'];// not franchise labels
 var SAFE_LABELS       = ['DoNotTouch'];                    // NEVER change campaigns/accounts with these
@@ -180,6 +181,128 @@ function main() {
   tab.getRange(1, 1, data.length, data[0].length).setValues(data);
   emailSummary_(results, changes);
   Logger.log(results.join('\n'));
+
+  applyCampaignQueue_(ss);   // pause / activate requests share this hourly run
+}
+
+/* ── campaign pause / activate ───────────────────────────────────────────────
+ * Drains Campaign_Queue: matches each PENDING request to a live campaign (by id
+ * when the feed provided one, else by name+franchise-label), pauses/enables it
+ * across EVERY campaign type (PMax/Shopping/Video included), then writes status
+ * back and emails a summary. DoNotTouch and DRY_RUN are honored. */
+function applyCampaignQueue_(ss) {
+  var tab = ss.getSheetByName(CAMPQ_TAB);
+  if (!tab) { Logger.log('No "' + CAMPQ_TAB + '" tab — no pause/activate to do.'); return; }
+  var data = tab.getDataRange().getValues();
+  if (data.length < 2) { Logger.log('Campaign queue empty.'); return; }
+  var H = {}; data[0].forEach(function (h, i) { H[String(h).trim()] = i; });
+  if (H.Action === undefined || H.Status === undefined || H.Campaign === undefined) {
+    Logger.log('Campaign queue header missing required columns.'); return;
+  }
+
+  // pending requests — keyed by id when present, else by label||name
+  var byId = {}, byName = {}, pend = [];
+  for (var r = 1; r < data.length; r++) {
+    if (String(data[r][H.Status]).trim().toLowerCase() !== 'pending') continue;
+    var act = String(data[r][H.Action]).trim().toLowerCase();
+    if (act !== 'pause' && act !== 'enable') { mark_(data, H, r, 'failed', 'bad action'); continue; }
+    var cid = (H.CampaignId !== undefined) ? String(data[r][H.CampaignId] || '').trim() : '';
+    var camp = String(data[r][H.Campaign] || '').trim();
+    var label = String(data[r][H.Label] || '').trim();
+    if (!camp && !cid) { mark_(data, H, r, 'failed', 'no campaign'); continue; }
+    var rec = { row: r, action: act, camp: camp, label: label, cid: cid, done: false };
+    pend.push(rec);
+    if (cid) byId[cid] = rec; else byName[(label + '||' + camp).toLowerCase()] = rec;
+  }
+  if (!pend.length) { Logger.log('No pending campaign status changes.'); return; }
+  Logger.log(pend.length + ' pending campaign status change(s).');
+
+  var ignore = {}; IGNORE_LABELS.forEach(function (n) { ignore[n.toLowerCase()] = true; });
+  var safe = {};   SAFE_LABELS.forEach(function (n) { safe[n.toLowerCase()] = true; });
+  var results = [];
+
+  var sel = AdsManagerApp.accounts();
+  if (ACCOUNT_LABEL) sel = sel.withCondition("LabelNames CONTAINS '" + ACCOUNT_LABEL + "'");
+  var accts = sel.get();
+  while (accts.hasNext()) {
+    var acct = accts.next(); AdsManagerApp.select(acct);
+    var acctName = acct.getName() || acct.getCustomerId();
+
+    var campLabels = {};   // id -> [label names]
+    try {
+      var lit = AdsApp.search("SELECT campaign.id, label.name FROM campaign_label");
+      while (lit.hasNext()) { var lr = lit.next();
+        (campLabels[String(lr.campaign.id)] = campLabels[String(lr.campaign.id)] || []).push(lr.label.name); }
+    } catch (e) { Logger.log('  [' + acctName + '] label query failed: ' + e); }
+
+    var selectors = campaignSelectors_();
+    for (var s = 0; s < selectors.length; s++) {
+      var it; try { it = selectors[s](); } catch (e0) { continue; }
+      if (!it) continue;
+      while (it.hasNext()) {
+        var c = it.next(); var id = String(c.getId()); var nm = c.getName();
+        var labs = campLabels[id] || [];
+        // resolve which pending (if any) this campaign satisfies
+        var rec = byId[id];
+        if (!rec) {
+          // name fallback: match campaign name AND franchise label (or account fallback)
+          for (var kk in byName) {
+            var cand = byName[kk];
+            if (cand.done) continue;
+            if (cand.camp.toLowerCase() !== nm.toLowerCase()) continue;
+            var labelOk = labs.some(function (n) { return n.toLowerCase() === cand.label.toLowerCase(); })
+                        || acctName.toLowerCase() === cand.label.toLowerCase();
+            if (labelOk) { rec = cand; break; }
+          }
+        }
+        if (!rec || rec.done) continue;
+        if (labs.some(function (n) { return safe[n.toLowerCase()]; })) {   // DoNotTouch
+          mark_(data, H, rec.row, 'failed', 'campaign is DoNotTouch — skipped'); rec.done = true;
+          results.push('X ' + labelName_(rec) + ' — DoNotTouch, skipped'); continue;
+        }
+        try {
+          if (!DRY_RUN) { if (rec.action === 'pause') c.pause(); else c.enable(); }
+          var word = rec.action === 'pause' ? 'paused' : 'enabled';
+          mark_(data, H, rec.row, DRY_RUN ? 'dry-run' : word, (DRY_RUN ? 'would ' : '') + word + ' [' + acctName + ']');
+          rec.done = true;
+          results.push((DRY_RUN ? '~ ' : 'OK ') + labelName_(rec) + ' — ' + (DRY_RUN ? 'would ' : '') + word);
+        } catch (e2) {
+          mark_(data, H, rec.row, 'failed', String(e2)); rec.done = true;
+          results.push('X ' + labelName_(rec) + ' — ' + e2);
+        }
+      }
+    }
+  }
+
+  // anything still pending wasn't found in any processed account
+  pend.forEach(function (rec) {
+    if (rec.done) return;
+    mark_(data, H, rec.row, 'failed', rec.cid ? 'campaign id not found' : 'campaign not found (rerun the feed so it has an id)');
+    results.push('X ' + labelName_(rec) + ' — not found');
+  });
+
+  tab.getRange(1, 1, data.length, data[0].length).setValues(data);
+  emailCampaigns_(results);
+  Logger.log(results.join('\n'));
+}
+
+function labelName_(rec) { return (rec.label ? rec.label + ' · ' : '') + (rec.camp || rec.cid); }
+
+// selectors for EVERY campaign type — older API versions may lack some, so guard each
+function campaignSelectors_() {
+  var out = [function () { return AdsApp.campaigns().get(); }];
+  if (typeof AdsApp.performanceMaxCampaigns === 'function') out.push(function () { return AdsApp.performanceMaxCampaigns().get(); });
+  if (typeof AdsApp.shoppingCampaigns === 'function')       out.push(function () { return AdsApp.shoppingCampaigns().get(); });
+  if (typeof AdsApp.videoCampaigns === 'function')          out.push(function () { return AdsApp.videoCampaigns().get(); });
+  return out;
+}
+
+function emailCampaigns_(results) {
+  if (!results.length || !EMAIL_TO) return;
+  var fails = 0; results.forEach(function (s) { if (s.charAt(0) === 'X') fails++; });
+  var subj = 'Pacing campaign status' + (DRY_RUN ? ' (DRY RUN)' : '') + ' — ' + (results.length - fails) + ' ok'
+           + (fails ? ', ' + fails + ' failed' : '');
+  try { MailApp.sendEmail(EMAIL_TO, subj, results.join('\n')); } catch (e) { Logger.log('email failed: ' + e); }
 }
 
 /**

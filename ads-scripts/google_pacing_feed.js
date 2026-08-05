@@ -38,7 +38,7 @@ var CAMPB_TAB  = 'Google_Campaigns';   // per-campaign current daily budget snap
 var FEED_HEADER  = ['Label', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue', 'DailyBudget', 'Status', 'Updated'];
 var DAILY_HEADER = ['Date', 'Label', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue'];
 var CAMP_HEADER  = ['Date', 'Label', 'Campaign', 'Spend', 'Conv', 'Clicks', 'Impr', 'Revenue'];
-var CAMPB_HEADER = ['Label', 'Campaign', 'BudgetId', 'DailyBudget', 'Status'];
+var CAMPB_HEADER = ['Label', 'Campaign', 'BudgetId', 'DailyBudget', 'Status', 'CampaignId'];
 
 function main() {
   var ss = SpreadsheetApp.openByUrl(SPREADSHEET_URL);
@@ -116,7 +116,7 @@ function main() {
 
         fr.forEach(function (f) {
           allFr[f] = true;
-          campBudgets.push([f, cname, bId, r2(bAmt), isOn ? 'active' : 'paused']);   // per-campaign current budget
+          campBudgets.push([f, cname, bId, r2(bAmt), isOn ? 'active' : 'paused', id]);   // per-campaign current budget (+ id for pause/activate)
           if (isOn) {
             enabled[f] = true;
             if (!budgets[f]) budgets[f] = {};

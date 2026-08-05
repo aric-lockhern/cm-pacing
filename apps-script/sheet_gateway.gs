@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-04';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-05';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -21,7 +21,7 @@ var SLACK_CHANNEL     = '#pacing';                     // display only
 
 var TABS = {
   google:     { name: 'Google_Feed',   header: ['Label','Spend','Conv','Clicks','Impr','Revenue','DailyBudget','Status','Updated'] },
-  googleCampaigns:{ name: 'Google_Campaigns', header: ['Label','Campaign','BudgetId','DailyBudget','Status'] },
+  googleCampaigns:{ name: 'Google_Campaigns', header: ['Label','Campaign','BudgetId','DailyBudget','Status','CampaignId'] },
   dailyG:     { name: 'Daily_Google',  header: ['Date','Label','Spend','Conv','Clicks','Impr','Revenue'] },
   dailyGCamp: { name: 'Daily_Google_Campaign', header: ['Date','Label','Campaign','Spend','Conv','Clicks','Impr','Revenue'] },
   lsa:        { name: 'LSA_Feed',      header: ['Label','Spend','Conv','Status','Updated'] },
@@ -32,6 +32,7 @@ var TABS = {
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
   budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
+  campaignQueue:{ name: 'Campaign_Queue', header: ['Timestamp','Label','Campaign','CampaignId','Action','RequestedBy','Status','AppliedAt','Note'] },
   groups:     { name: 'Groups',        header: ['Label','Group','Hidden','Type','Manager','Updated'] },
   dismissals: { name: 'Dismissals',    header: ['Label','Until','Updated'] },
   team:       { name: 'Team',          header: ['Name','SlackID'] },
@@ -76,6 +77,7 @@ function doGet(e) {
       case 'syncMeta':     out = syncMeta_(p); break;
       case 'metaPreview':  out = metaPreview_(p.url, p.tab, p.range); break;
       case 'queueBudget':  out = queueBudget_(p); break;
+      case 'queueCampaign':out = queueCampaign_(p); break;
       case 'logMove':      out = logMove_(p); break;
       case 'voidMove':     out = voidMove_(p); break;
       case 'setType':    out = setGroupField_(p.label, 'Type', p.value); break;
@@ -228,6 +230,7 @@ function getDataString_(force) {
     metaDaily:  readTab_(ss, TABS.metaDaily),
     metaFeed:   readTab_(ss, TABS.metaFeed),
     budgetQueue:readTab_(ss, TABS.budgetQueue),
+    campaignQueue:readTab_(ss, TABS.campaignQueue),
     budgetMoves:readTab_(ss, TABS.budgetMoves),
     budgets:    readTab_(ss, TABS.budgets),
     budgetLog:  readTab_(ss, TABS.budgetLog),
@@ -654,6 +657,38 @@ function queueBudget_(p) {
   }
   if (changed) tab.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
   tab.appendRow([new Date(), label, round2_(amt), String((p && p.by) || ''), 'pending', '', '']);
+  bustCache_();
+  return { ok: true };
+}
+
+/* ── campaign pause / activate queue ──────────────────────────────────────────
+ * The app's Pause/Activate buttons append a PENDING row here; the hourly apply
+ * script drains it, pauses/enables the campaign, and writes the status back. */
+function queueCampaign_(p) {
+  var label = String((p && p.label) || '').trim();
+  var camp = String((p && p.campaign) || '').trim();
+  var cid = String((p && p.campaignId) || '').trim();
+  var act = String((p && p.do) || '').trim().toLowerCase();   // 'pause' | 'enable'
+  if (!camp && !cid) return { ok: false, error: 'no campaign' };
+  if (act !== 'pause' && act !== 'enable') return { ok: false, error: 'bad action' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.campaignQueue.name) || ss.insertSheet(TABS.campaignQueue.name);
+  ensureHeader_(tab, TABS.campaignQueue);
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  var changed = false;
+  for (var i = 1; i < vals.length; i++) {                     // supersede older pending for the same campaign
+    var sameId = cid && String(vals[i][h.CampaignId]).trim() === cid;
+    var sameNm = !cid && String(vals[i][h.Campaign]).trim().toLowerCase() === camp.toLowerCase()
+                      && String(vals[i][h.Label]).trim().toLowerCase() === label.toLowerCase();
+    if ((sameId || sameNm) && String(vals[i][h.Status]).trim().toLowerCase() === 'pending') {
+      vals[i][h.Status] = 'superseded'; vals[i][h.Note] = 'replaced by a newer request'; changed = true;
+    }
+  }
+  if (changed) tab.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+  var row = tab.getLastRow() + 1;
+  tab.appendRow([new Date(), label, camp, cid, act, String((p && p.by) || ''), 'pending', '', '']);
+  tab.getRange(row, 4).setNumberFormat('@').setValue(cid);   // CampaignId as text (preserve big ids exactly)
   bustCache_();
   return { ok: true };
 }

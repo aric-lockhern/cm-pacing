@@ -37,7 +37,7 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 | `apps-script/sheet_gateway.gs` | Apps Script **web app** — the JSONP gateway, Slack poster, and budget sync. |
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |
-| `ads-scripts/budget_apply.js` | Google Ads MCC script (hourly) that **applies** pacing budget changes queued from the app UI, within safety limits, and emails a summary. Starts in `DRY_RUN`. |
+| `ads-scripts/budget_apply.js` | Google Ads MCC script (hourly) that **applies** queued changes from the app UI — pacing **budget changes** (any campaign type, via budget id) and **campaign pause/activate** (Pause/Activate buttons) — within safety limits, then emails a summary. Starts in `DRY_RUN`. |
 
 > Meta has no Google Ads-style script (Meta can't run one). Instead the gateway
 > **pulls Meta daily spend + metrics from a DataSlayer Google Sheet** into
