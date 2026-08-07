@@ -123,6 +123,23 @@
   .settings-row label{width:150px;color:var(--muted);font-size:13px}
   .settings-row input{flex:1;min-width:220px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 9px}
   .hint{font-size:12px;color:var(--faint);margin:2px 0 12px}
+  /* insights tab */
+  .ins-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:10px 0 4px}
+  .ins-controls>div{display:flex;flex-direction:column;gap:4px}
+  .ins-controls label{color:var(--muted);font-size:12px}
+  .ins-controls input,.ins-controls select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px}
+  .ins-check{flex-direction:row!important;align-items:center;gap:6px;font-size:13px;color:var(--ink);padding-bottom:6px}
+  .ins-card{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:12px 14px;margin:12px 0}
+  .ins-h{font-weight:700;font-size:14px;margin-bottom:8px}
+  .ins-groupby{float:right;font-weight:400}
+  .ins-groupby select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 6px;font-size:12px}
+  .ins-scroll{overflow-x:auto}
+  .instbl{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .instbl th,.instbl td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:right}
+  .instbl th:first-child,.instbl td:first-child,.instbl .l{text-align:left}
+  .instbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
+  .instbl tr.ins-tot td{font-weight:700;border-top:2px solid var(--line);border-bottom:0}
+  #insCanvas{width:100%;display:block;margin-top:4px}
   .moverow{display:flex;gap:12px;align-items:flex-end;margin:10px 0;flex-wrap:wrap}
   .moverow>div{display:flex;flex-direction:column;gap:4px}
   .moverow label{color:var(--muted);font-size:12px}
@@ -215,6 +232,7 @@
   </div>
   <div class="seg" id="overviewSeg" style="margin-left:2px">
     <button id="overviewBtn" onclick="showExec()" title="Leadership overview: billed, fees, projected spend and pacing by account">Overview</button>
+    <button id="insightsBtn" onclick="showInsights()" title="Performance analytics: rolled-up metrics by franchise / platform / market, with date range, filters and CSV export">Insights</button>
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
@@ -268,6 +286,7 @@
   <div id="emptyState" class="empty" style="display:none"></div>
 
   <div id="execView" style="display:none"></div>
+  <div id="insightsView" style="display:none"></div>
 </main>
 
 <!-- deep dive -->
@@ -424,13 +443,15 @@ let CFG = { googleFee:0.25, metaFee:0.20, budgetSheetUrl:'' };
 let MARKUP = localStorage.getItem('pace_markup')==='1';
 let CHANNEL = localStorage.getItem('pace_channel') || 'google';
 function setChannel(ch){
-  const wasExec = EXEC;
-  EXEC = false; localStorage.setItem('pace_exec','0');
+  const wasExec = EXEC || INSIGHTS;
+  EXEC = false; localStorage.setItem('pace_exec','0'); INSIGHTS = false;
   if(CHANNEL===ch && !wasExec) return;
   CHANNEL = ch; localStorage.setItem('pace_channel', ch);
   closeDD();
   document.getElementById('execView').style.display = 'none';
+  document.getElementById('insightsView').style.display = 'none';
   const ob=document.getElementById('overviewBtn'); if(ob) ob.classList.remove('on');
+  const ib=document.getElementById('insightsBtn'); if(ib) ib.classList.remove('on');
   showMain(true);
   if(DATA){ build(); render(); if(ch==='google') setTimeout(()=>prefetchCampaigns(), 30); }
 }
@@ -439,6 +460,7 @@ function setChannel(ch){
 let EXEC = localStorage.getItem('pace_exec')==='1';
 let EXEC_DATA = null;
 let EXEC_CHART_MODE = 'time';
+let INSIGHTS = false;   // Insights (analytics) tab open
 // Elements that make up the normal (per-channel) view, hidden while Exec is open.
 const MAIN_ELS = ['totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
 function showMain(on){ MAIN_ELS.forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = on?'':'none'; }); }
@@ -452,12 +474,16 @@ function brandOf(label){
   const raw = String(label||'').split(' - ')[0].trim();
   return BRAND_ALIASES[raw.toLowerCase()] || raw || '—';
 }
+// Market = the location part of a franchise label ("Fetch - Fort Myers" → "Fort Myers").
+function marketOf(label){ const p=String(label||'').split(' - '); return p.length>1 ? p.slice(1).join(' - ').trim() : '—'; }
 
 function showExec(){
-  EXEC = true; localStorage.setItem('pace_exec','1'); closeDD();
+  EXEC = true; localStorage.setItem('pace_exec','1'); INSIGHTS = false; closeDD();
   showMain(false);
   document.getElementById('execView').style.display = 'block';
+  document.getElementById('insightsView').style.display = 'none';
   document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
+  document.getElementById('insightsBtn').classList.remove('on');
   document.getElementById('overviewBtn').classList.add('on');
   document.getElementById('monthLabel').textContent = `Overview · YTD ${now.getFullYear()}`;
   if(DATA) renderExec();
@@ -678,6 +704,213 @@ function drawExecCompare(ctx, W, H, ed){
   });
 }
 window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('execCanvas')) drawExecChart(); });
+
+/* ══════════════ INSIGHTS (performance analytics, its own tab) ══════════════
+   Rolls up cost/impr/click/CPC/CTR/leads/CPL from the daily feeds across every
+   platform, with a date range, franchise + platform filters, MoM compare, a
+   YTD leads/CPL chart, and a market-level raw table with CSV export. LSA has no
+   click/impression data, so CPC/CTR are blank for LSA. */
+let INS = null;
+function insDefault(){ const y=now.getFullYear(); return { from:`${y}-${String(now.getMonth()+1).padStart(2,'0')}-01`, to:isoLocal(ASOF), franchise:'', platform:'', groupBy:'franchise', compare:false }; }
+function showInsights(){
+  INSIGHTS=true; EXEC=false; localStorage.setItem('pace_exec','0'); closeDD();
+  showMain(false);
+  document.getElementById('execView').style.display='none';
+  document.getElementById('insightsView').style.display='block';
+  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
+  document.getElementById('overviewBtn').classList.remove('on');
+  document.getElementById('insightsBtn').classList.add('on');
+  document.getElementById('monthLabel').textContent = 'Insights';
+  if(!INS) INS=insDefault();
+  if(DATA) renderInsights();
+}
+// unified daily records tagged with platform + brand/market
+function insDaily(){
+  const out=[];
+  const add=(rows,platform,c)=>{ (rows||[]).forEach(r=>{
+    const d=String(r.Date).slice(0,10); if(!d) return;
+    const label=String(r.Label||'').trim(), k=key(label);
+    if(IGNORE_FRANCHISES.has(k)) return;
+    out.push({date:d, month:d.slice(0,7), label, brand:brandOf(label), market:marketOf(label), platform,
+      cost:Number(r[c.cost])||0, impr:c.impr?Number(r[c.impr])||0:0, clicks:c.clicks?Number(r[c.clicks])||0:0, leads:Number(r[c.leads])||0}); }); };
+  add(DATA.dailyG,   'Google', {cost:'Spend', impr:'Impr',        clicks:'Clicks', leads:'Conv'});
+  add(DATA.dailyLsa, 'LSA',    {cost:'Spend', impr:null,          clicks:null,     leads:'Conv'});
+  add(DATA.metaDaily,'Meta',   {cost:'Spend', impr:'Impressions', clicks:'Clicks', leads:'Leads/Conv'});
+  return out;
+}
+const INS_METRICS = [
+  {k:'cost',   label:'Cost'},
+  {k:'impr',   label:'Impr'},
+  {k:'clicks', label:'Clicks'},
+  {k:'cpc',    label:'CPC',    better:'down'},
+  {k:'ctr',    label:'CTR',    better:'up'},
+  {k:'leads',  label:'Leads',  better:'up'},
+  {k:'cpl',    label:'CPL',    better:'down'},
+];
+function insDerive(a){   // a = {cost,impr,clicks,leads} sums → add cpc/ctr/cpl
+  return { cost:a.cost, impr:a.impr, clicks:a.clicks, leads:a.leads,
+    cpc: a.clicks>0 ? a.cost/a.clicks : null,
+    ctr: a.impr>0 ? a.clicks/a.impr : null,
+    cpl: a.leads>0 ? a.cost/a.leads : null };
+}
+function insAgg(recs, keyFn){
+  const m={};
+  recs.forEach(r=>{ const g=keyFn(r); if(g==null) return;
+    const o=m[g]=m[g]||{cost:0,impr:0,clicks:0,leads:0};
+    o.cost+=r.cost; o.impr+=r.impr; o.clicks+=r.clicks; o.leads+=r.leads; });
+  Object.keys(m).forEach(g=> m[g]=insDerive(m[g]));
+  return m;
+}
+function insFilter(recs){
+  const f=INS;
+  return recs.filter(r=>
+    (!f.from || r.date>=f.from) && (!f.to || r.date<=f.to) &&
+    (!f.franchise || r.label===f.franchise) &&
+    (!f.platform || r.platform===f.platform));
+}
+function insM2(n){ return n==null?'—':(n<0?'-$':'$')+Math.abs(n).toFixed(2); }
+function insMoney(n){ return n==null?'—':usd(n); }
+function insInt(n){ return n==null?'—':Math.round(n).toLocaleString(); }
+function insPct(n){ return n==null?'—':(n*100).toFixed(2)+'%'; }
+function insFmt(k,v){ return k==='cost'?insMoney(v): (k==='cpc'||k==='cpl')?insM2(v): k==='ctr'?insPct(v): insInt(v); }
+function insDeltaHtml(cur, prev, better){
+  if(!INS.compare || prev==null || prev===0 || cur==null) return '';
+  const d=(cur-prev)/Math.abs(prev);
+  if(Math.abs(d)<0.001) return ' <span class="muted" style="font-size:11px">0%</span>';
+  const up=d>0, good = better==='up'?up : better==='down'?!up : null;
+  const cls = good===null?'muted':good?'pos':'neg';
+  return ` <span class="${cls}" style="font-size:11px">${up?'▲':'▼'}${Math.abs(d*100).toFixed(0)}%</span>`;
+}
+// previous equal-length window immediately before [from,to]
+function insPrevRange(){
+  const f=new Date(INS.from+'T00:00:00'), t=new Date(INS.to+'T00:00:00');
+  const len=Math.round((t-f)/864e5)+1;
+  const pt=new Date(f); pt.setDate(pt.getDate()-1);
+  const pf=new Date(pt); pf.setDate(pf.getDate()-(len-1));
+  return {from:isoLocal(pf), to:isoLocal(pt)};
+}
+function setIns(field,val){ INS[field]=val; renderInsights(); }
+function renderInsights(){
+  const view=document.getElementById('insightsView'); if(!view) return;
+  const all=insDaily();
+  const franchises=[...new Set(all.map(r=>r.label))].sort();
+  const cur=insFilter(all);
+  // previous-period records for compare
+  let prevAgg={};
+  if(INS.compare){ const pr=insPrevRange();
+    const prevRecs=all.filter(r=> r.date>=pr.from && r.date<=pr.to &&
+      (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
+    prevAgg=insAgg(prevRecs, r=> insGroupKey(r)); }
+
+  const franOpts=['<option value="">All franchises</option>'].concat(franchises.map(f=>`<option value="${esc(f)}"${f===INS.franchise?' selected':''}>${esc(f)}</option>`)).join('');
+  const platOpts=[['','All platforms'],['Google','Google'],['LSA','LSA'],['Meta','Meta']].map(p=>`<option value="${p[0]}"${p[0]===INS.platform?' selected':''}>${p[1]}</option>`).join('');
+
+  const controls=`<div class="ins-controls">
+    <div><label>From</label><input type="date" value="${INS.from}" onchange="setIns('from',this.value)"></div>
+    <div><label>To</label><input type="date" value="${INS.to}" onchange="setIns('to',this.value)"></div>
+    <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
+    <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>
+    <div><label>Compare</label><label class="ins-check"><input type="checkbox" ${INS.compare?'checked':''} onchange="setIns('compare',this.checked)"> vs previous period</label></div>
+  </div>`;
+
+  view.innerHTML = controls
+    + insRollup(cur, prevAgg)
+    + insChartCard()
+    + insRawCard(cur);
+  drawInsChart();
+}
+function insGroupKey(r){
+  switch(INS.groupBy){ case 'platform': return r.platform; case 'market': return r.market; case 'brand': return r.brand; case 'total': return 'All'; default: return r.label; }
+}
+function insRollup(cur, prevAgg){
+  const agg=insAgg(cur, insGroupKey);
+  const keys=Object.keys(agg).sort((a,b)=> agg[b].cost-agg[a].cost);
+  const groupLabel={franchise:'Franchise',platform:'Platform',market:'Market',brand:'Brand',total:'Total'}[INS.groupBy];
+  const head=`<th>${groupLabel}</th>`+INS_METRICS.map(m=>`<th>${m.label}</th>`).join('');
+  const body=keys.map(g=>{
+    const a=agg[g], p=prevAgg[g]||{};
+    return `<tr><td>${esc(g)}</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,a[m.k])}${insDeltaHtml(a[m.k],p[m.k],m.better)}</td>`).join('')+`</tr>`;
+  }).join('');
+  // totals row
+  const tot=insAgg(cur, ()=> 'All')['All'];
+  const totPrev=INS.compare?(insAgg((()=>{const pr=insPrevRange();return insDaily().filter(r=>r.date>=pr.from&&r.date<=pr.to&&(!INS.franchise||r.label===INS.franchise)&&(!INS.platform||r.platform===INS.platform));})(),()=>'All')['All']||{}):{};
+  const totRow= tot ? `<tr class="ins-tot"><td>Total</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,tot[m.k])}${insDeltaHtml(tot[m.k],totPrev[m.k],m.better)}</td>`).join('')+`</tr>` : '';
+  return `<div class="ins-card"><div class="ins-h">Performance rollup${INS.compare?' · vs previous period':''}
+    <span class="ins-groupby"><label class="muted">Group by</label> <select onchange="setIns('groupBy',this.value)">${[['franchise','Franchise'],['platform','Platform'],['market','Market'],['brand','Brand'],['total','Total']].map(g=>`<option value="${g[0]}"${g[0]===INS.groupBy?' selected':''}>${g[1]}</option>`).join('')}</select></span></div>
+    <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}${totRow}</tbody></table></div>
+    <div class="muted" style="font-size:11px;margin-top:6px">CPC/CTR need click &amp; impression data — LSA has none, so those cells are blank for LSA. CPL = cost ÷ leads.</div></div>`;
+}
+function insChartCard(){
+  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the franchise &amp; platform filters; ignores the date range)</span></div>
+    <canvas id="insCanvas"></canvas></div>`;
+}
+function insRawCard(cur){
+  const agg=insAgg(cur, r=> r.month+'||'+r.platform+'||'+r.label);
+  const rows=Object.keys(agg).map(k=>{ const [month,platform,label]=k.split('||'); return {month,platform,label,market:marketOf(label),...agg[k]}; })
+    .sort((a,b)=> b.month.localeCompare(a.month) || a.label.localeCompare(b.label) || a.platform.localeCompare(b.platform));
+  const body=rows.map(r=>`<tr>
+    <td class="l">${esc(monthLabel(r.month))}</td><td class="l">${esc(r.platform)}</td><td class="l">${esc(r.label)}</td><td class="l">${esc(r.market)}</td>
+    <td>${insMoney(r.cost)}</td><td>${insInt(r.impr)}</td><td>${insInt(r.clicks)}</td><td>${insM2(r.cpc)}</td><td>${insPct(r.ctr)}</td><td>${insInt(r.leads)}</td><td>${insM2(r.cpl)}</td></tr>`).join('');
+  return `<div class="ins-card"><div class="ins-h">Raw · month × platform × franchise × market
+    <button class="ghost" style="float:right;padding:4px 12px;font-size:12px" onclick="insExportCsv()">Download CSV</button></div>
+    <div class="ins-scroll"><table class="instbl"><thead><tr><th class="l">Month</th><th class="l">Platform</th><th class="l">Franchise</th><th class="l">Market</th><th>Cost</th><th>Impr</th><th>Clicks</th><th>CPC</th><th>CTR</th><th>Leads</th><th>CPL</th></tr></thead>
+    <tbody>${body||`<tr><td colspan="11" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
+}
+function insExportCsv(){
+  const cur=insFilter(insDaily());
+  const agg=insAgg(cur, r=> r.month+'||'+r.platform+'||'+r.label);
+  const rows=Object.keys(agg).map(k=>{ const [month,platform,label]=k.split('||'); const a=agg[k];
+    return [month, platform, label, marketOf(label),
+      a.cost.toFixed(2), Math.round(a.impr), Math.round(a.clicks),
+      a.cpc==null?'':a.cpc.toFixed(2), a.ctr==null?'':(a.ctr*100).toFixed(2)+'%', Math.round(a.leads), a.cpl==null?'':a.cpl.toFixed(2)]; })
+    .sort((a,b)=> b[0].localeCompare(a[0]) || a[2].localeCompare(b[2]) || a[1].localeCompare(b[1]));
+  const header=['Month','Platform','Franchise','Market','Cost','Impressions','Clicks','CPC','CTR','Leads','CPL'];
+  const esc=s=>{ s=String(s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  const csv=[header].concat(rows).map(r=>r.map(esc).join(',')).join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob), a=document.createElement('a');
+  a.href=url; a.download=`insights_${INS.from}_to_${INS.to}.csv`; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+// YTD leads (bars) + CPL (line) by month, honoring franchise/platform filters
+function drawInsChart(){
+  const cv=document.getElementById('insCanvas'); if(!cv) return;
+  const yr=String(now.getFullYear());
+  const recs=insDaily().filter(r=> r.month.slice(0,4)===yr &&
+    (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
+  const byM=insAgg(recs, r=> r.month);
+  const cats=[]; for(let m=0;m<=now.getMonth();m++) cats.push(yr+'-'+String(m+1).padStart(2,'0'));
+  const leads=cats.map(c=> byM[c]?byM[c].leads:0);
+  const cpl=cats.map(c=> byM[c]&&byM[c].cpl!=null?byM[c].cpl:null);
+  const dpr=window.devicePixelRatio||1;
+  const cssW=Math.max(320, Math.round(cv.getBoundingClientRect().width || (cv.parentElement&&cv.parentElement.clientWidth) || 900)), cssH=250;
+  cv.width=Math.round(cssW*dpr); cv.height=Math.round(cssH*dpr); cv.style.height=cssH+'px';
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const W=cssW,H=cssH; ctx.clearRect(0,0,W,H);
+  const padL=52,padR=54,padT=16,padB=38, plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
+  const maxL=Math.max(...leads,1)*1.15;
+  const cplVals=cpl.filter(v=>v!=null); const maxC=Math.max(...(cplVals.length?cplVals:[1]),1)*1.2;
+  const n=Math.max(cats.length,1), step=plotW/n, bw=Math.min(42, step*0.55);
+  const yL=v=> base-(v/maxL)*plotH, yC=v=> base-(v/maxC)*plotH;
+  ctx.font='10px sans-serif';
+  [0,0.5,1].forEach(t=>{ const yy=padT+plotH*(1-t);
+    ctx.strokeStyle='#e4e4ea'; ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(W-padR,yy); ctx.stroke();
+    ctx.fillStyle='#9a99a6'; ctx.textAlign='right'; ctx.fillText(Math.round(maxL*t).toLocaleString(), padL-6, yy+3);
+    ctx.textAlign='left'; ctx.fillStyle='#c07d12'; ctx.fillText('$'+(maxC*t).toFixed(0), W-padR+6, yy+3); });
+  // leads bars
+  cats.forEach((c,i)=>{ const cx=padL+step*i+step/2, v=leads[i]; if(v>0){ const h=(v/maxL)*plotH; ctx.fillStyle='#3b6fb0'; ctx.fillRect(cx-bw/2, base-h, bw, h); }
+    ctx.fillStyle='#6c6b78'; ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.fillText(monthLabel(c).replace(/ \d+$/,''), cx, H-18); });
+  // CPL line
+  ctx.strokeStyle='#c07d12'; ctx.lineWidth=2; ctx.beginPath(); let started=false;
+  cats.forEach((c,i)=>{ const v=cpl[i]; if(v==null) return; const cx=padL+step*i+step/2, py=yC(v); if(!started){ctx.moveTo(cx,py);started=true;} else ctx.lineTo(cx,py); });
+  ctx.stroke();
+  cats.forEach((c,i)=>{ const v=cpl[i]; if(v==null) return; const cx=padL+step*i+step/2, py=yC(v); ctx.fillStyle='#c07d12'; ctx.beginPath(); ctx.arc(cx,py,3,0,7); ctx.fill(); });
+  // legend
+  ctx.textAlign='left'; ctx.font='11px sans-serif';
+  ctx.fillStyle='#3b6fb0'; ctx.fillRect(padL, H-11, 10,10); ctx.fillStyle='#6c6b78'; ctx.fillText('Leads', padL+14, H-2);
+  ctx.strokeStyle='#c07d12'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(padL+70,H-6); ctx.lineTo(padL+86,H-6); ctx.stroke(); ctx.fillStyle='#6c6b78'; ctx.fillText('CPL', padL+90, H-2);
+}
+window.addEventListener('resize', ()=>{ if(INSIGHTS && document.getElementById('insCanvas')) drawInsChart(); });
 // Gross-up factor: turns ad spend into what the client is billed.
 // Uses each account's own budget split (gross ÷ ad-spend target), so a mixed
 // Google 25% / Meta 20% account grosses up exactly right.
@@ -735,6 +968,7 @@ async function load(fresh){
       setStatus('live','Live');
       render();
       if(EXEC) showExec();                                              // re-render exec with fresh data
+      else if(INSIGHTS) renderInsights();                              // re-render insights with fresh data
       else if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
       return;
     }catch(e){
