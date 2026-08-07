@@ -141,6 +141,19 @@
   .instbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
   .instbl tr.ins-tot td{font-weight:700;border-top:2px solid var(--line);border-bottom:0}
   #insCanvas{width:100%;display:block;margin-top:4px}
+  /* present / screenshot mode */
+  #insightsView.ins-present{max-width:960px;margin:0 auto}
+  .ins-present-head{display:flex;justify-content:space-between;align-items:flex-end;margin:6px 0 14px;padding-bottom:10px;border-bottom:2px solid var(--accent)}
+  .ins-present-title{font-size:22px;font-weight:800;letter-spacing:-.2px}
+  .ins-present-sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .ins-present-tools{display:flex;gap:8px;align-items:center}
+  .ins-present-tools select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px}
+  .ins-cap{color:var(--muted);font-size:12px;margin:-2px 0 8px}
+  .ins-present .ins-card{padding:16px 18px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.06);border-radius:14px;break-inside:avoid}
+  .ins-present .ins-h{font-size:17px;margin-bottom:2px}
+  .ins-present .instbl{font-size:14px}
+  .ins-present .instbl th,.ins-present .instbl td{padding:9px 12px}
+  .ins-present .instbl tbody tr:nth-child(even){background:var(--panel2)}
   .moverow{display:flex;gap:12px;align-items:flex-end;margin:10px 0;flex-wrap:wrap}
   .moverow>div{display:flex;flex-direction:column;gap:4px}
   .moverow label{color:var(--muted);font-size:12px}
@@ -721,7 +734,18 @@ window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('exec
 let INS = null;
 // earliest / latest date across ALL daily feeds (so the default range shows every channel)
 function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
-function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), brand:'', franchise:'', platform:'', compare:false }; }
+function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), brand:'', franchise:'', platform:'', compare:false, present:false }; }
+// human date-range label — a whole calendar month reads "July 2026", else "Jul 1 – Jul 27, 2026"
+function insRangeLabel(){
+  const f=INS.from, t=INS.to; if(!f||!t) return '';
+  const fd=new Date(f+'T00:00:00'), td=new Date(t+'T00:00:00');
+  const lastDay=isoLocal(new Date(fd.getFullYear(), fd.getMonth()+1, 0));
+  if(f.slice(8)==='01' && t===lastDay && f.slice(0,7)===t.slice(0,7))
+    return fd.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  const o={month:'short',day:'numeric',year:'numeric'};
+  return fd.toLocaleDateString(undefined,o)+' – '+td.toLocaleDateString(undefined,o);
+}
+function insScopeLabel(){ return INS.franchise || INS.brand || 'All brands'; }
 function insPreset(which){
   const s=insSpan(), today=isoLocal(ASOF), y=now.getFullYear();
   if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
@@ -843,31 +867,44 @@ function renderInsights(){
       <button onclick="insPreset('30d')">Last 30d</button>
       <button onclick="insPreset('month')">This month</button>
     </div></div>
+    <div><label>Deck</label><button class="primary" onclick="setIns('present',true)" title="Clean, screenshot-friendly layout for the monthly deck">Present mode</button></div>
   </div>`;
 
   const scopeNote = (INS.brand||INS.franchise||INS.platform)
     ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brand&&('brand '+INS.brand), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}. All tables below reflect this.</div>`
     : '';
 
-  view.innerHTML = controls + scopeNote
-    + insTable('Total', 'All channels', cur, prevRecs, ()=>'Total')
-    + insTable('By platform', 'Platform', cur, prevRecs, r=>r.platform)
-    + insTable('By brand', 'Brand', cur, prevRecs, r=>r.brand)
-    + insTable('By market', 'Market', cur, prevRecs, r=>r.market)
+  const period=insRangeLabel(), scope=insScopeLabel();
+  const caption = INS.present ? `${scope} · ${period}` : '';
+  const presentHead = INS.present ? `<div class="ins-present-head">
+      <div><div class="ins-present-title">${esc(scope)}</div><div class="ins-present-sub">Performance summary · ${esc(period)}${INS.platform?' · '+esc(INS.platform):''}</div></div>
+      <div class="ins-present-tools">
+        <select title="Switch brand" onchange="setBrandFilter(this.value)">${brandOpts}</select>
+        <button class="ghost" onclick="setIns('present',false)">Exit present mode</button>
+      </div>
+    </div>` : '';
+
+  view.className = INS.present ? 'ins-present' : '';
+  view.innerHTML = (INS.present ? presentHead : controls + scopeNote)
+    + insTable('Total', 'All channels', cur, prevRecs, ()=>'Total', caption)
+    + insTable('By platform', 'Platform', cur, prevRecs, r=>r.platform, caption)
+    + insTable('By brand', 'Brand', cur, prevRecs, r=>r.brand, caption)
+    + insTable('By market', 'Market', cur, prevRecs, r=>r.market, caption)
     + insChartCard()
-    + insRawCard(cur);
+    + (INS.present ? '' : insRawCard(cur));
   drawInsChart();
 }
 // selecting a brand narrows the franchise list, so clear a now-out-of-scope franchise
 function setBrandFilter(b){ INS.brand=b; if(b && INS.franchise && brandOf(INS.franchise)!==b) INS.franchise=''; renderInsights(); }
 // one static rollup table for a given grouping
-function insTable(title, colLabel, cur, prevRecs, keyFn){
+function insTable(title, colLabel, cur, prevRecs, keyFn, caption){
   const agg=insAgg(cur, keyFn), prev=INS.compare?insAgg(prevRecs, keyFn):{};
   const keys=Object.keys(agg).sort((a,b)=> agg[b].cost-agg[a].cost);
   const head=`<th class="l">${esc(colLabel)}</th>`+INS_METRICS.map(m=>`<th>${m.label}</th>`).join('');
   const body=keys.map(g=>{ const a=agg[g], p=prev[g]||{};
     return `<tr><td class="l">${esc(g)}</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,a[m.k])}${insDeltaHtml(a[m.k],p[m.k],m.better)}</td>`).join('')+`</tr>`; }).join('');
-  return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}</div>
+  const cap = caption ? `<div class="ins-cap">${esc(caption)}</div>` : '';
+  return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}</div>${cap}
     <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
 }
 function insChartCard(){
