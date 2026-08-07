@@ -746,7 +746,7 @@ function insRangeLabel(){
   const o={month:'short',day:'numeric',year:'numeric'};
   return fd.toLocaleDateString(undefined,o)+' – '+td.toLocaleDateString(undefined,o);
 }
-function insScopeLabel(){ return INS.franchise || INS.brand || 'All brands'; }
+function insScopeLabel(){ return INS.franchise || INS.brand || 'All accounts'; }
 function insPreset(which){
   const s=insSpan(), today=isoLocal(ASOF), y=now.getFullYear();
   if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
@@ -908,8 +908,13 @@ function insTable(title, colLabel, cur, prevRecs, keyFn, caption){
   return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}<button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>${cap}
     <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
 }
+// account/scope shown in the chart title (and its copied screenshot)
+function insChartScope(){
+  const acct = INS.franchise || INS.brand || 'All accounts';
+  return acct + (INS.platform ? ' · ' + INS.platform : '');
+}
 function insChartCard(){
-  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the brand / franchise / platform filters; ignores the date range)</span><button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>
+  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month — ${esc(insChartScope())} <span class="muted" style="font-weight:400;font-size:12px">(ignores the date range)</span><button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>
     <canvas id="insCanvas"></canvas></div>`;
 }
 function insRawCard(cur){
@@ -965,7 +970,8 @@ const INS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,A
 function tableCardToCanvas(card){
   const table=card.querySelector('table'); if(!table||!table.tHead||!table.tBodies[0]) return null;
   const title=insTitleText(card.querySelector('.ins-h'));
-  const cap=(card.querySelector('.ins-cap')||{}).textContent||'';
+  // always label the copied image with the account + period, even if no on-screen caption
+  const cap=((card.querySelector('.ins-cap')||{}).textContent||'').trim() || (insScopeLabel()+' · '+insRangeLabel());
   const heads=[...table.tHead.rows[0].cells].map(th=>({text:th.textContent.trim(), left:th.classList.contains('l')||th.cellIndex===0}));
   const rows=[...table.tBodies[0].rows].map(tr=>[...tr.cells].map(td=>({
     text:td.textContent.trim(), left:td.classList.contains('l')||td.cellIndex===0,
