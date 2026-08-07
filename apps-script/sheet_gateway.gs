@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-07';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-07b';  // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -171,10 +171,11 @@ function writeCache_(name, str) {
   } catch (e) { /* oversized or unavailable → just skip caching */ }
 }
 
-// Budgets auto-sync at most ONCE PER DAY on the data path (a quick read of the
-// budget sheet). Meta is deliberately NOT synced here — reading the big DataSlayer
-// block is slow, so it runs in the background on a daily trigger (dailyAutoSync_)
-// and via the manual "Sync Meta now" button. This keeps app loads fast.
+// Budgets AND Meta auto-sync at most ONCE PER DAY on the data path, so the tool
+// always shows the latest without anyone pressing Sync. The DataSlayer (Meta) read
+// is a little slow, but it's gated to once per calendar day (lastMetaSync != today),
+// so only the first load each day pays for it — the daily background trigger
+// (dailyAutoSync_, ~6am) usually does it first, making the on-read path a no-op.
 function maybeAutoSync_(cfg) {
   if (String(cfg.budgetAutoSync) !== 'false' &&
       cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined &&
@@ -186,6 +187,24 @@ function maybeAutoSync_(cfg) {
       catch (e) { /* leave that channel's snapshot in place */ }
     });
   }
+  // Meta: pull the latest daily DataSlayer data once per day, automatically.
+  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl &&
+      String(cfg.lastMetaSync || '') !== currentDate_()) {
+    try { syncMeta_({ source: 'auto' }); } catch (e) { /* keep the last good Meta snapshot */ }
+  }
+}
+
+// Make sure the daily background sync is scheduled WITHOUT anyone running
+// installDailyTrigger by hand. Checked at most once per day (cheap), self-heals if
+// the trigger was ever removed. Requires the deployment's owner authorization.
+function ensureDailyTrigger_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('trigCheck') === currentDate_()) return;    // already verified today
+    props.setProperty('trigCheck', currentDate_());
+    var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dailyAutoSync_'; });
+    if (!has) ScriptApp.newTrigger('dailyAutoSync_').timeBased().everyDays(1).atHour(6).create();
+  } catch (e) { /* trigger APIs unavailable in this context — the on-read sync still covers freshness */ }
 }
 
 // Run ONCE from the Apps Script editor to schedule the daily background sync, so no
@@ -222,6 +241,7 @@ function getDataString_(force) {
     if (hit) return hit;
   }
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  ensureDailyTrigger_();                 // self-schedule the background sync (no manual step)
   maybeAutoSync_(readConfig_(ss));
 
   var payload = {
