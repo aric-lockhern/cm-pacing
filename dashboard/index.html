@@ -149,6 +149,7 @@
   .ins-present-tools{display:flex;gap:8px;align-items:center}
   .ins-present-tools select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px}
   .ins-cap{color:var(--muted);font-size:12px;margin:-2px 0 8px}
+  .ins-copy{float:right;padding:4px 12px;font-size:12px;margin-left:8px}
   .ins-present .ins-card{padding:16px 18px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.06);border-radius:14px;break-inside:avoid}
   .ins-present .ins-h{font-size:17px;margin-bottom:2px}
   .ins-present .instbl{font-size:14px}
@@ -904,11 +905,11 @@ function insTable(title, colLabel, cur, prevRecs, keyFn, caption){
   const body=keys.map(g=>{ const a=agg[g], p=prev[g]||{};
     return `<tr><td class="l">${esc(g)}</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,a[m.k])}${insDeltaHtml(a[m.k],p[m.k],m.better)}</td>`).join('')+`</tr>`; }).join('');
   const cap = caption ? `<div class="ins-cap">${esc(caption)}</div>` : '';
-  return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}</div>${cap}
+  return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}<button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>${cap}
     <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
 }
 function insChartCard(){
-  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the brand / franchise / platform filters; ignores the date range)</span></div>
+  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the brand / franchise / platform filters; ignores the date range)</span><button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>
     <canvas id="insCanvas"></canvas></div>`;
 }
 function insRawCard(cur){
@@ -919,6 +920,7 @@ function insRawCard(cur){
     <td class="l">${esc(monthLabel(r.month))}</td><td class="l">${esc(r.platform)}</td><td class="l">${esc(r.label)}</td><td class="l">${esc(r.market)}</td>
     <td>${insMoney(r.cost)}</td><td>${insInt(r.impr)}</td><td>${insInt(r.clicks)}</td><td>${insM2(r.cpc)}</td><td>${insPct(r.ctr)}</td><td>${insInt(r.leads)}</td><td>${insM2(r.cpl)}</td></tr>`).join('');
   return `<div class="ins-card"><div class="ins-h">Raw · month × platform × franchise × market
+    <button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button>
     <button class="ghost" style="float:right;padding:4px 12px;font-size:12px" onclick="insExportCsv()">Download CSV</button></div>
     <div class="ins-scroll"><table class="instbl"><thead><tr><th class="l">Month</th><th class="l">Platform</th><th class="l">Franchise</th><th class="l">Market</th><th>Cost</th><th>Impr</th><th>Clicks</th><th>CPC</th><th>CTR</th><th>Leads</th><th>CPL</th></tr></thead>
     <tbody>${body||`<tr><td colspan="11" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
@@ -938,6 +940,78 @@ function insExportCsv(){
   const url=URL.createObjectURL(blob), a=document.createElement('a');
   a.href=url; a.download=`insights_${INS.from}_to_${INS.to}.csv`; document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+/* ── copy a card (table or chart) to the clipboard as a PNG — no external libs ── */
+async function copyCardImage(btn){
+  const card = btn.closest('.ins-card'); if(!card) return;
+  const canvas = card.querySelector('canvas') ? chartCardToCanvas(card) : tableCardToCanvas(card);
+  if(!canvas){ return; }
+  const done = (t)=>{ const o=btn.textContent; btn.textContent=t; btn.disabled=true; setTimeout(()=>{btn.textContent=o;btn.disabled=false;},1500); };
+  try{
+    const item = new ClipboardItem({ 'image/png': new Promise(res=> canvas.toBlob(b=>res(b),'image/png')) });
+    await navigator.clipboard.write([item]);
+    done('Copied ✓');
+  }catch(e){   // clipboard-image unsupported (e.g. Firefox) → download instead
+    const a=document.createElement('a'); a.href=canvas.toDataURL('image/png');
+    a.download=(card.querySelector('.ins-h')?insTitleText(card.querySelector('.ins-h')):'insights').replace(/[^\w]+/g,'_')+'.png';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    done('Downloaded');
+  }
+}
+// title text of a card header, excluding button/badge elements (text nodes only)
+function insTitleText(h){ return [...h.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join('').trim(); }
+const INS_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+// Render a rollup/raw table straight to a canvas (crisp, white bg, deck-ready).
+function tableCardToCanvas(card){
+  const table=card.querySelector('table'); if(!table||!table.tHead||!table.tBodies[0]) return null;
+  const title=insTitleText(card.querySelector('.ins-h'));
+  const cap=(card.querySelector('.ins-cap')||{}).textContent||'';
+  const heads=[...table.tHead.rows[0].cells].map(th=>({text:th.textContent.trim(), left:th.classList.contains('l')||th.cellIndex===0}));
+  const rows=[...table.tBodies[0].rows].map(tr=>[...tr.cells].map(td=>({
+    text:td.textContent.trim(), left:td.classList.contains('l')||td.cellIndex===0,
+    color: td.querySelector('.pos')?'#1f9d5b': td.querySelector('.neg')?'#d64535': null })));
+  const dpr=2, c=document.createElement('canvas'), ctx=c.getContext('2d');
+  const fCell='14px '+INS_FONT, fHead='700 11px '+INS_FONT, fTitle='800 18px '+INS_FONT, fCap='12px '+INS_FONT;
+  const padX=14, rowH=32, headH=32, titleH=title?30:0, capH=cap?20:0, padTop=12, padBot=12;
+  const ncol=heads.length, colW=new Array(ncol).fill(40);
+  ctx.font=fHead; heads.forEach((h,i)=>colW[i]=Math.max(colW[i], ctx.measureText(h.text.toUpperCase()).width));
+  ctx.font=fCell; rows.forEach(r=>r.forEach((cell,i)=>{ if(cell) colW[i]=Math.max(colW[i], ctx.measureText(cell.text).width); }));
+  for(let i=0;i<ncol;i++) colW[i]=Math.ceil(colW[i])+padX*2;
+  const tableW=colW.reduce((a,b)=>a+b,0);
+  const W=Math.max(tableW,320), H=padTop+titleH+capH+headH+rows.length*rowH+padBot;
+  c.width=Math.round(W*dpr); c.height=Math.round(H*dpr); ctx.scale(dpr,dpr);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H); ctx.textBaseline='middle';
+  let y=padTop;
+  if(title){ ctx.fillStyle='#17171c'; ctx.font=fTitle; ctx.textAlign='left'; ctx.fillText(title, 2, y+titleH/2+1); y+=titleH; }
+  if(cap){ ctx.fillStyle='#8a8a94'; ctx.font=fCap; ctx.textAlign='left'; ctx.fillText(cap, 2, y+capH/2); y+=capH; }
+  // header
+  ctx.font=fHead; ctx.fillStyle='#8a8a94'; let x=0;
+  heads.forEach((h,i)=>{ const cw=colW[i]; ctx.textAlign=h.left?'left':'right'; ctx.fillText(h.text.toUpperCase(), h.left?x+padX:x+cw-padX, y+headH/2); x+=cw; });
+  y+=headH; ctx.strokeStyle='#f26722'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(0,y-3); ctx.lineTo(tableW,y-3); ctx.stroke();
+  // body
+  ctx.font=fCell;
+  rows.forEach((r,ri)=>{
+    if(ri%2===1){ ctx.fillStyle='#f5f5f8'; ctx.fillRect(0,y,tableW,rowH); }
+    x=0; r.forEach((cell,i)=>{ const cw=colW[i]; ctx.fillStyle=cell.color||(cell.left?'#17171c':'#2b2a35'); ctx.textAlign=cell.left?'left':'right'; ctx.fillText(cell.text, cell.left?x+padX:x+cw-padX, y+rowH/2); x+=cw; });
+    ctx.strokeStyle='#ececf0'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,y+rowH-0.5); ctx.lineTo(tableW,y+rowH-0.5); ctx.stroke();
+    y+=rowH;
+  });
+  return c;
+}
+// Compose the chart canvas onto a titled white card for a clean deck image.
+function chartCardToCanvas(card){
+  const src=card.querySelector('canvas'); if(!src) return null;
+  const title=insTitleText(card.querySelector('.ins-h'));
+  const cssW=Math.round(src.getBoundingClientRect().width || src.width), cssH=parseInt(src.style.height)||250;
+  const dpr=2, pad=12, titleH=title?26:0;
+  const W=cssW+pad*2, H=cssH+titleH+pad*2;
+  const c=document.createElement('canvas'); c.width=Math.round(W*dpr); c.height=Math.round(H*dpr);
+  const ctx=c.getContext('2d'); ctx.scale(dpr,dpr);
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+  let y=pad;
+  if(title){ ctx.fillStyle='#17171c'; ctx.font='800 16px '+INS_FONT; ctx.textBaseline='middle'; ctx.fillText(title, pad, y+titleH/2); y+=titleH; }
+  ctx.drawImage(src, pad, y, cssW, cssH);
+  return c;
 }
 // YTD leads (bars) + CPL (line) by month, honoring franchise/platform filters
 function drawInsChart(){
