@@ -735,7 +735,7 @@ window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('exec
 let INS = null;
 // earliest / latest date across ALL daily feeds (so the default range shows every channel)
 function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
-function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), brand:'', franchise:'', platform:'', compare:false, present:false }; }
+function insDefault(){ const y=now.getFullYear(), m=now.getMonth(); return { from:isoLocal(new Date(y,m-1,1)), to:isoLocal(new Date(y,m,0)), brand:'', franchise:'', platform:'', compare:false, present:false }; }
 // human date-range label — a whole calendar month reads "July 2026", else "Jul 1 – Jul 27, 2026"
 function insRangeLabel(){
   const f=INS.from, t=INS.to; if(!f||!t) return '';
@@ -752,7 +752,6 @@ function insPreset(which){
   if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
   else if(which==='ytd'){ INS.from=`${y}-01-01`; INS.to=today; }
   else if(which==='lastmonth'){ const m=now.getMonth(); INS.from=isoLocal(new Date(y,m-1,1)); INS.to=isoLocal(new Date(y,m,0)); }
-  else if(which==='30d'){ const d=new Date(ASOF); d.setDate(d.getDate()-29); INS.from=isoLocal(d); INS.to=today; }
   else if(which==='month'){ INS.from=`${y}-${String(now.getMonth()+1).padStart(2,'0')}-01`; INS.to=today; }
   renderInsights();
 }
@@ -865,7 +864,6 @@ function renderInsights(){
       <button onclick="insPreset('all')">All data</button>
       <button onclick="insPreset('ytd')">YTD</button>
       <button onclick="insPreset('lastmonth')">Last month</button>
-      <button onclick="insPreset('30d')">Last 30d</button>
       <button onclick="insPreset('month')">This month</button>
     </div></div>
     <div><label>Deck</label><button class="primary" onclick="setIns('present',true)" title="Clean, screenshot-friendly layout for the monthly deck">Present mode</button></div>
