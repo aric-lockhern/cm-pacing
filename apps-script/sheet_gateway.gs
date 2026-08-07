@@ -11,12 +11,18 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-05';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-07';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
 var SLACK_BOT_TOKEN   = '';                            // xoxb-... with users:read (optional)
 var SLACK_CHANNEL     = '#pacing';                     // display only
+// Last-known data-source sheets. readConfig_ falls back to these when the Config
+// value is blank, so a wiped Config can never silently stop auto-sync again.
+var DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ4VaWdVmQpkMYdtMLU-PFkAG8Q2PA4/edit?gid=0#gid=0';
+var DEFAULT_META_URL   = 'https://docs.google.com/spreadsheets/d/1jmPBXlgQ9do5Iure7zrFrIXW_vv5jxxcu6rmXW-6veo/edit?gid=0#gid=0';
+var DEFAULT_META_TAB   = 'QUERY - RAW DATA';
+var DEFAULT_META_RANGE = 'AH:AR';
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 var TABS = {
@@ -300,8 +306,13 @@ function readConfig_(ss) {
     if (k === 'googleFee' || k === 'metaFee' || k === 'lsaFee' || k === 'lsaMonths' || k === 'alertMinLeads' ||
         k === 'alertLeadsWarn' || k === 'alertLeadsCrit' ||
         k === 'alertCplWarn' || k === 'alertCplCrit') cfg[k] = Number(v);
-    else if (k) cfg[k] = v;
+    else if (k && v !== '' && v !== null && v !== undefined) cfg[k] = v;   // don't let a blank cell clobber the default
   });
+  // Coalesce data-source URLs to the last-known defaults so auto-sync never dies on a blank Config.
+  if (!cfg.budgetSheetUrl) cfg.budgetSheetUrl = DEFAULT_BUDGET_URL;
+  if (!cfg.metaSheetUrl)   cfg.metaSheetUrl   = DEFAULT_META_URL;
+  if (!cfg.metaTab)        cfg.metaTab        = DEFAULT_META_TAB;
+  if (!cfg.metaRange)      cfg.metaRange      = DEFAULT_META_RANGE;
   return cfg;
 }
 

@@ -428,6 +428,12 @@
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
 const DEFAULT_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';
 const BRAND              = 'Franchise';   // header word before "Pacing"
+// Last-known data-source sheets — baked in so a blank Settings field can never
+// wipe them again (and so the fields always show the right value).
+const DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ4VaWdVmQpkMYdtMLU-PFkAG8Q2PA4/edit?gid=0#gid=0';
+const DEFAULT_META_URL   = 'https://docs.google.com/spreadsheets/d/1jmPBXlgQ9do5Iure7zrFrIXW_vv5jxxcu6rmXW-6veo/edit?gid=0#gid=0';
+const DEFAULT_META_TAB   = 'QUERY - RAW DATA';
+const DEFAULT_META_RANGE = 'AH:AR';
 /* ═════════════════════════════════════════════════════════════════════ */
 
 const LS = {
@@ -1981,7 +1987,7 @@ function openSettings(){
   document.getElementById('setGFee').value = ((CFG.googleFee||0)*100);
   document.getElementById('setMFee').value = ((CFG.metaFee||0)*100);
   document.getElementById('setLFee').value = ((CFG.lsaFee||0)*100);
-  document.getElementById('setBudUrl').value = CFG.budgetSheetUrl||'';
+  document.getElementById('setBudUrl').value = CFG.budgetSheetUrl||DEFAULT_BUDGET_URL;
   const C = alertCfg();
   document.getElementById('setMinLeads').value  = C.minLeads;
   document.getElementById('setLeadsWarn').value = Math.round(C.leadsWarn*100);
@@ -2008,9 +2014,9 @@ function openSettings(){
   setColL('setMetaColL', CFG.budgetMetaCol);
   document.getElementById('syncMsg').textContent =
     CFG.lastBudgetSync ? `last auto-sync ${CFG.lastBudgetSync}` : 'no auto-sync yet';
-  document.getElementById('setMetaUrl').value   = CFG.metaSheetUrl||'';
-  document.getElementById('setMetaTab').value   = CFG.metaTab||'';
-  document.getElementById('setMetaRange').value = CFG.metaRange||'';
+  document.getElementById('setMetaUrl').value   = CFG.metaSheetUrl||DEFAULT_META_URL;
+  document.getElementById('setMetaTab').value   = CFG.metaTab||DEFAULT_META_TAB;
+  document.getElementById('setMetaRange').value = CFG.metaRange||DEFAULT_META_RANGE;
   document.getElementById('metaMsg').textContent = CFG.lastMetaSync ? `last sync ${CFG.lastMetaSync}` : 'never synced';
   document.getElementById('setName').value = LS.name();
   document.getElementById('setUrl').value = localStorage.getItem('pace_url')||'';
@@ -2099,16 +2105,16 @@ async function saveSettings(){
     googleFee: Number(val('setGFee'))/100,
     metaFee:   Number(val('setMFee'))/100,
     lsaFee:    Number(val('setLFee'))/100,
-    budgetSheetUrl: val('setBudUrl'),
+    budgetSheetUrl: val('setBudUrl') || DEFAULT_BUDGET_URL,   // never save blank — a blank field wiped these before
     alertMinLeads:  Number(val('setMinLeads')),
     alertLeadsWarn: Number(val('setLeadsWarn'))/100,
     alertLeadsCrit: Number(val('setLeadsCrit'))/100,
     alertCplWarn:   Number(val('setCplWarn'))/100,
     alertCplCrit:   Number(val('setCplCrit'))/100,
     emailTo:        val('setEmailTo'),
-    metaSheetUrl:   val('setMetaUrl'),
-    metaTab:        val('setMetaTab'),
-    metaRange:      val('setMetaRange')
+    metaSheetUrl:   val('setMetaUrl')   || DEFAULT_META_URL,
+    metaTab:        val('setMetaTab')   || DEFAULT_META_TAB,
+    metaRange:      val('setMetaRange') || DEFAULT_META_RANGE
   };
   const res = await call({action:'setConfigBatch', pairs: JSON.stringify(pairs)});
   if(!res || !res.ok){ alert('Settings failed to save: '+((res&&res.error)||'?')); return; }
