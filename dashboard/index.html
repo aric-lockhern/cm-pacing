@@ -713,18 +713,20 @@ function drawExecCompare(ctx, W, H, ed){
 window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('execCanvas')) drawExecChart(); });
 
 /* ══════════════ INSIGHTS (performance analytics, its own tab) ══════════════
-   Rolls up cost/impr/click/CPC/CTR/leads/CPL from the daily feeds across every
-   platform, with a date range, franchise + platform filters, MoM compare, a
-   YTD leads/CPL chart, and a market-level raw table with CSV export. LSA has no
-   click/impression data, so CPC/CTR are blank for LSA. */
+   CLIENT-FACING: cost/CPC/CPL are grossed up by each platform's fee, so the
+   margin is baked in and never shown. Static rollup tables (Total, Platform,
+   Brand, Market) plus a YTD leads/CPL chart and a market-level raw table with
+   CSV export. Date range + brand/franchise/platform filters + MoM compare drive
+   every table live. LSA has no click/impression data, so CPC/CTR are blank there. */
 let INS = null;
 // earliest / latest date across ALL daily feeds (so the default range shows every channel)
 function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
-function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), franchise:'', platform:'', groupBy:'franchise', compare:false }; }
+function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), brand:'', franchise:'', platform:'', compare:false }; }
 function insPreset(which){
   const s=insSpan(), today=isoLocal(ASOF), y=now.getFullYear();
   if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
   else if(which==='ytd'){ INS.from=`${y}-01-01`; INS.to=today; }
+  else if(which==='lastmonth'){ const m=now.getMonth(); INS.from=isoLocal(new Date(y,m-1,1)); INS.to=isoLocal(new Date(y,m,0)); }
   else if(which==='30d'){ const d=new Date(ASOF); d.setDate(d.getDate()-29); INS.from=isoLocal(d); INS.to=today; }
   else if(which==='month'){ INS.from=`${y}-${String(now.getMonth()+1).padStart(2,'0')}-01`; INS.to=today; }
   renderInsights();
@@ -741,15 +743,18 @@ function showInsights(){
   if(!INS) INS=insDefault();
   if(DATA) renderInsights();
 }
-// unified daily records tagged with platform + brand/market
+// unified daily records tagged with platform + brand/market.
+// COST IS CLIENT-FACING: raw ad spend is grossed up by each platform's fee, so the
+// margin is baked in and never disclosed. CPC/CPL derive from this billed cost.
 function insDaily(){
+  const fee={Google:Number(CFG.googleFee)||0, LSA:Number(CFG.lsaFee)||0, Meta:Number(CFG.metaFee)||0};
   const out=[];
-  const add=(rows,platform,c)=>{ (rows||[]).forEach(r=>{
+  const add=(rows,platform,c)=>{ const f=fee[platform]||0, g=f<1?1/(1-f):1; (rows||[]).forEach(r=>{
     const d=String(r.Date).slice(0,10); if(!d) return;
     const label=String(r.Label||'').trim(), k=key(label);
     if(IGNORE_FRANCHISES.has(k)) return;
     out.push({date:d, month:d.slice(0,7), label, brand:brandOf(label), market:marketOf(label), platform,
-      cost:Number(r[c.cost])||0, impr:c.impr?Number(r[c.impr])||0:0, clicks:c.clicks?Number(r[c.clicks])||0:0, leads:Number(r[c.leads])||0}); }); };
+      cost:(Number(r[c.cost])||0)*g, impr:c.impr?Number(r[c.impr])||0:0, clicks:c.clicks?Number(r[c.clicks])||0:0, leads:Number(r[c.leads])||0}); }); };
   add(DATA.dailyG,   'Google', {cost:'Spend', impr:'Impr',        clicks:'Clicks', leads:'Conv'});
   add(DATA.dailyLsa, 'LSA',    {cost:'Spend', impr:null,          clicks:null,     leads:'Conv'});
   add(DATA.metaDaily,'Meta',   {cost:'Spend', impr:'Impressions', clicks:'Clicks', leads:'Leads/Conv'});
@@ -782,6 +787,7 @@ function insFilter(recs){
   const f=INS;
   return recs.filter(r=>
     (!f.from || r.date>=f.from) && (!f.to || r.date<=f.to) &&
+    (!f.brand || r.brand===f.brand) &&
     (!f.franchise || r.label===f.franchise) &&
     (!f.platform || r.platform===f.platform));
 }
@@ -810,61 +816,62 @@ function setIns(field,val){ INS[field]=val; renderInsights(); }
 function renderInsights(){
   const view=document.getElementById('insightsView'); if(!view) return;
   const all=insDaily();
-  const franchises=[...new Set(all.map(r=>r.label))].sort();
+  const brands=[...new Set(all.map(r=>r.brand))].sort();
+  const franchises=[...new Set(all.filter(r=>!INS.brand||r.brand===INS.brand).map(r=>r.label))].sort();
   const cur=insFilter(all);
-  // previous-period records for compare
-  let prevAgg={};
+  // previous-period records (same filters) for MoM compare
+  let prevRecs=[];
   if(INS.compare){ const pr=insPrevRange();
-    const prevRecs=all.filter(r=> r.date>=pr.from && r.date<=pr.to &&
-      (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
-    prevAgg=insAgg(prevRecs, r=> insGroupKey(r)); }
+    prevRecs=all.filter(r=> r.date>=pr.from && r.date<=pr.to &&
+      (!INS.brand||r.brand===INS.brand) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform)); }
 
+  const brandOpts=['<option value="">All brands</option>'].concat(brands.map(b=>`<option value="${esc(b)}"${b===INS.brand?' selected':''}>${esc(b)}</option>`)).join('');
   const franOpts=['<option value="">All franchises</option>'].concat(franchises.map(f=>`<option value="${esc(f)}"${f===INS.franchise?' selected':''}>${esc(f)}</option>`)).join('');
   const platOpts=[['','All platforms'],['Google','Google'],['LSA','LSA'],['Meta','Meta']].map(p=>`<option value="${p[0]}"${p[0]===INS.platform?' selected':''}>${p[1]}</option>`).join('');
 
   const controls=`<div class="ins-controls">
     <div><label>From</label><input type="date" value="${INS.from}" onchange="setIns('from',this.value)"></div>
     <div><label>To</label><input type="date" value="${INS.to}" onchange="setIns('to',this.value)"></div>
+    <div><label>Brand</label><select onchange="setBrandFilter(this.value)">${brandOpts}</select></div>
     <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
     <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>
     <div><label>Compare</label><label class="ins-check"><input type="checkbox" ${INS.compare?'checked':''} onchange="setIns('compare',this.checked)"> vs previous period</label></div>
     <div><label>Quick range</label><div class="seg ins-presets">
       <button onclick="insPreset('all')">All data</button>
       <button onclick="insPreset('ytd')">YTD</button>
+      <button onclick="insPreset('lastmonth')">Last month</button>
       <button onclick="insPreset('30d')">Last 30d</button>
       <button onclick="insPreset('month')">This month</button>
     </div></div>
   </div>`;
 
-  view.innerHTML = controls
-    + insRollup(cur, prevAgg)
+  const scopeNote = (INS.brand||INS.franchise||INS.platform)
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brand&&('brand '+INS.brand), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}. All tables below reflect this.</div>`
+    : '';
+
+  view.innerHTML = controls + scopeNote
+    + insTable('Total', 'All channels', cur, prevRecs, ()=>'Total')
+    + insTable('By platform', 'Platform', cur, prevRecs, r=>r.platform)
+    + insTable('By brand', 'Brand', cur, prevRecs, r=>r.brand)
+    + insTable('By market', 'Market', cur, prevRecs, r=>r.market)
     + insChartCard()
     + insRawCard(cur);
   drawInsChart();
 }
-function insGroupKey(r){
-  switch(INS.groupBy){ case 'platform': return r.platform; case 'market': return r.market; case 'brand': return r.brand; case 'total': return 'All'; default: return r.label; }
-}
-function insRollup(cur, prevAgg){
-  const agg=insAgg(cur, insGroupKey);
+// selecting a brand narrows the franchise list, so clear a now-out-of-scope franchise
+function setBrandFilter(b){ INS.brand=b; if(b && INS.franchise && brandOf(INS.franchise)!==b) INS.franchise=''; renderInsights(); }
+// one static rollup table for a given grouping
+function insTable(title, colLabel, cur, prevRecs, keyFn){
+  const agg=insAgg(cur, keyFn), prev=INS.compare?insAgg(prevRecs, keyFn):{};
   const keys=Object.keys(agg).sort((a,b)=> agg[b].cost-agg[a].cost);
-  const groupLabel={franchise:'Franchise',platform:'Platform',market:'Market',brand:'Brand',total:'Total'}[INS.groupBy];
-  const head=`<th>${groupLabel}</th>`+INS_METRICS.map(m=>`<th>${m.label}</th>`).join('');
-  const body=keys.map(g=>{
-    const a=agg[g], p=prevAgg[g]||{};
-    return `<tr><td>${esc(g)}</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,a[m.k])}${insDeltaHtml(a[m.k],p[m.k],m.better)}</td>`).join('')+`</tr>`;
-  }).join('');
-  // totals row
-  const tot=insAgg(cur, ()=> 'All')['All'];
-  const totPrev=INS.compare?(insAgg((()=>{const pr=insPrevRange();return insDaily().filter(r=>r.date>=pr.from&&r.date<=pr.to&&(!INS.franchise||r.label===INS.franchise)&&(!INS.platform||r.platform===INS.platform));})(),()=>'All')['All']||{}):{};
-  const totRow= tot ? `<tr class="ins-tot"><td>Total</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,tot[m.k])}${insDeltaHtml(tot[m.k],totPrev[m.k],m.better)}</td>`).join('')+`</tr>` : '';
-  return `<div class="ins-card"><div class="ins-h">Performance rollup${INS.compare?' · vs previous period':''}
-    <span class="ins-groupby"><label class="muted">Group by</label> <select onchange="setIns('groupBy',this.value)">${[['franchise','Franchise'],['platform','Platform'],['market','Market'],['brand','Brand'],['total','Total']].map(g=>`<option value="${g[0]}"${g[0]===INS.groupBy?' selected':''}>${g[1]}</option>`).join('')}</select></span></div>
-    <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}${totRow}</tbody></table></div>
-    <div class="muted" style="font-size:11px;margin-top:6px">CPC/CTR need click &amp; impression data — LSA has none, so those cells are blank for LSA. CPL = cost ÷ leads.</div></div>`;
+  const head=`<th class="l">${esc(colLabel)}</th>`+INS_METRICS.map(m=>`<th>${m.label}</th>`).join('');
+  const body=keys.map(g=>{ const a=agg[g], p=prev[g]||{};
+    return `<tr><td class="l">${esc(g)}</td>`+INS_METRICS.map(m=>`<td>${insFmt(m.k,a[m.k])}${insDeltaHtml(a[m.k],p[m.k],m.better)}</td>`).join('')+`</tr>`; }).join('');
+  return `<div class="ins-card"><div class="ins-h">${esc(title)}${INS.compare?' · vs previous period':''}</div>
+    <div class="ins-scroll"><table class="instbl"><thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="8" class="muted">No data in this range.</td></tr>`}</tbody></table></div></div>`;
 }
 function insChartCard(){
-  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the franchise &amp; platform filters; ignores the date range)</span></div>
+  return `<div class="ins-card"><div class="ins-h">YTD leads &amp; CPL by month <span class="muted" style="font-weight:400;font-size:12px">(honors the brand / franchise / platform filters; ignores the date range)</span></div>
     <canvas id="insCanvas"></canvas></div>`;
 }
 function insRawCard(cur){
@@ -900,7 +907,7 @@ function drawInsChart(){
   const cv=document.getElementById('insCanvas'); if(!cv) return;
   const yr=String(now.getFullYear());
   const recs=insDaily().filter(r=> r.month.slice(0,4)===yr &&
-    (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
+    (!INS.brand||r.brand===INS.brand) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
   const byM=insAgg(recs, r=> r.month);
   const cats=[]; for(let m=0;m<=now.getMonth();m++) cats.push(yr+'-'+String(m+1).padStart(2,'0'));
   const leads=cats.map(c=> byM[c]?byM[c].leads:0);
