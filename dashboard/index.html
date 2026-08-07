@@ -129,6 +129,7 @@
   .ins-controls label{color:var(--muted);font-size:12px}
   .ins-controls input,.ins-controls select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px}
   .ins-check{flex-direction:row!important;align-items:center;gap:6px;font-size:13px;color:var(--ink);padding-bottom:6px}
+  .ins-presets button{padding:5px 10px;font-size:12px}
   .ins-card{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:12px 14px;margin:12px 0}
   .ins-h{font-weight:700;font-size:14px;margin-bottom:8px}
   .ins-groupby{float:right;font-weight:400}
@@ -711,7 +712,17 @@ window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('exec
    YTD leads/CPL chart, and a market-level raw table with CSV export. LSA has no
    click/impression data, so CPC/CTR are blank for LSA. */
 let INS = null;
-function insDefault(){ const y=now.getFullYear(); return { from:`${y}-${String(now.getMonth()+1).padStart(2,'0')}-01`, to:isoLocal(ASOF), franchise:'', platform:'', groupBy:'franchise', compare:false }; }
+// earliest / latest date across ALL daily feeds (so the default range shows every channel)
+function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
+function insDefault(){ const s=insSpan(); return { from:s.mn||`${now.getFullYear()}-01-01`, to:s.mx||isoLocal(ASOF), franchise:'', platform:'', groupBy:'franchise', compare:false }; }
+function insPreset(which){
+  const s=insSpan(), today=isoLocal(ASOF), y=now.getFullYear();
+  if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
+  else if(which==='ytd'){ INS.from=`${y}-01-01`; INS.to=today; }
+  else if(which==='30d'){ const d=new Date(ASOF); d.setDate(d.getDate()-29); INS.from=isoLocal(d); INS.to=today; }
+  else if(which==='month'){ INS.from=`${y}-${String(now.getMonth()+1).padStart(2,'0')}-01`; INS.to=today; }
+  renderInsights();
+}
 function showInsights(){
   INSIGHTS=true; EXEC=false; localStorage.setItem('pace_exec','0'); closeDD();
   showMain(false);
@@ -811,6 +822,12 @@ function renderInsights(){
     <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
     <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>
     <div><label>Compare</label><label class="ins-check"><input type="checkbox" ${INS.compare?'checked':''} onchange="setIns('compare',this.checked)"> vs previous period</label></div>
+    <div><label>Quick range</label><div class="seg ins-presets">
+      <button onclick="insPreset('all')">All data</button>
+      <button onclick="insPreset('ytd')">YTD</button>
+      <button onclick="insPreset('30d')">Last 30d</button>
+      <button onclick="insPreset('month')">This month</button>
+    </div></div>
   </div>`;
 
   view.innerHTML = controls
