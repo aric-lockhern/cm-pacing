@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-07b';  // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-10';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -635,22 +635,23 @@ function syncMeta_(p) {
   mt.getRange(1, 1, body.length, TABS.metaDaily.header.length).setValues(body);
   forceText_(mt, TABS.metaDaily);
 
-  // Meta feed = each franchise's status/daily-budget from the last few days of data.
-  // A franchise is active if any of its campaigns is ACTIVE in that window; daily budget
-  // = its active campaigns' budget on its most recent active day. Franchises with no rows
-  // in the window aren't written, so the app treats them as not running (paused).
+  // Meta feed = each franchise's status/daily-budget from its MOST RECENT day in the
+  // data. Using the latest day (not "active on any of the last N days") means a
+  // campaign you just paused shows paused immediately instead of lingering as active.
+  // A franchise is active if any of its campaigns is ACTIVE on that latest day; daily
+  // budget = its active campaigns' budget that day. Franchises with no rows aren't
+  // written, so the app treats them as not running (paused).
   var feedRows = [], now = new Date();
-  var recent = Object.keys(feedByDate).sort().slice(-3);   // last 3 days present in the data
-  var feedAgg = {};                                        // tag -> { budget, active, day }
-  recent.forEach(function (d) {
+  var latest = {};   // tag -> { day, budget, active }  (its most recent day present)
+  Object.keys(feedByDate).sort().forEach(function (d) {   // ascending → last write wins = latest day
     var fmap = feedByDate[d];
     Object.keys(fmap).forEach(function (tg) {
-      var cur = feedAgg[tg] = feedAgg[tg] || { budget: 0, active: false, day: '' };
-      if (fmap[tg].active) { cur.active = true; if (d >= cur.day) { cur.budget = fmap[tg].budget; cur.day = d; } }
+      var cur = latest[tg];
+      if (!cur || d >= cur.day) latest[tg] = { day: d, budget: fmap[tg].budget, active: fmap[tg].active };
     });
   });
-  Object.keys(feedAgg).sort().forEach(function (tg) {
-    feedRows.push([tg, round2_(feedAgg[tg].budget), feedAgg[tg].active ? 'active' : 'paused', now]);
+  Object.keys(latest).sort().forEach(function (tg) {
+    feedRows.push([tg, round2_(latest[tg].budget), latest[tg].active ? 'active' : 'paused', now]);
   });
   var mf = ss.getSheetByName(TABS.metaFeed.name) || ss.insertSheet(TABS.metaFeed.name);
   mf.clearContents();
