@@ -150,6 +150,15 @@
   .ins-present-tools select{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px}
   .ins-cap{color:var(--muted);font-size:12px;margin:-2px 0 8px}
   .ins-copy{float:right;padding:4px 12px;font-size:12px;margin-left:8px}
+  /* multi-select brand dropdown */
+  .ins-brand-dd{position:relative;display:inline-block}
+  .ins-dd-btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:7px 10px;cursor:pointer;min-width:150px;text-align:left;font:inherit;font-size:13px}
+  .ins-dd-caret{float:right;color:var(--muted);margin-left:8px}
+  .ins-dd-panel{display:none;position:absolute;z-index:30;top:calc(100% + 4px);left:0;min-width:210px;max-height:300px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:4px}
+  .ins-brand-dd.open .ins-dd-panel{display:block}
+  .ins-dd-item{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:13px;color:var(--ink);cursor:pointer;white-space:nowrap;border-radius:6px}
+  .ins-dd-item:hover{background:var(--panel2)}
+  .ins-dd-item input{margin:0}
   .ins-present .ins-card{padding:16px 18px;margin:16px 0;box-shadow:0 1px 3px rgba(0,0,0,.06);border-radius:14px;break-inside:avoid}
   .ins-present .ins-h{font-size:17px;margin-bottom:2px}
   .ins-present .instbl{font-size:14px}
@@ -735,7 +744,7 @@ window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('exec
 let INS = null;
 // earliest / latest date across ALL daily feeds (so the default range shows every channel)
 function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
-function insDefault(){ const y=now.getFullYear(), m=now.getMonth(); return { from:isoLocal(new Date(y,m-1,1)), to:isoLocal(new Date(y,m,0)), brand:'', franchise:'', platform:'', compare:false, present:false }; }
+function insDefault(){ const y=now.getFullYear(), m=now.getMonth(); return { from:isoLocal(new Date(y,m-1,1)), to:isoLocal(new Date(y,m,0)), brands:[], _brandOpen:false, franchise:'', platform:'', compare:false, present:false }; }
 // human date-range label — a whole calendar month reads "July 2026", else "Jul 1 – Jul 27, 2026"
 function insRangeLabel(){
   const f=INS.from, t=INS.to; if(!f||!t) return '';
@@ -746,7 +755,23 @@ function insRangeLabel(){
   const o={month:'short',day:'numeric',year:'numeric'};
   return fd.toLocaleDateString(undefined,o)+' – '+td.toLocaleDateString(undefined,o);
 }
-function insScopeLabel(){ return INS.franchise || INS.brand || 'All accounts'; }
+function insBrandSummary(){ return INS.brands.length===0?'': INS.brands.length===1?INS.brands[0]:INS.brands.length+' brands'; }
+function insScopeLabel(){ return INS.franchise || insBrandSummary() || 'All accounts'; }
+// multi-select brand dropdown (checkboxes); reused in the filter bar and present header
+function insBrandDD(brands){
+  const sum = INS.brands.length===0?'All brands': INS.brands.length===1?INS.brands[0]:`${INS.brands.length} brands`;
+  const items = `<label class="ins-dd-item"><input type="checkbox" ${INS.brands.length===0?'checked':''} onchange="insBrandAll()"> All brands</label>`
+    + brands.map(b=>`<label class="ins-dd-item"><input type="checkbox" ${INS.brands.includes(b)?'checked':''} onchange="insBrandToggleOne('${jsStr(b)}',this.checked)"> ${esc(b)}</label>`).join('');
+  return `<div class="ins-brand-dd${INS._brandOpen?' open':''}">
+    <button type="button" class="ins-dd-btn" onclick="insBrandToggle(event)">${esc(sum)}<span class="ins-dd-caret">▾</span></button>
+    <div class="ins-dd-panel">${items}</div></div>`;
+}
+function insBrandToggle(ev){ if(ev) ev.stopPropagation(); INS._brandOpen=!INS._brandOpen;
+  const dd=document.querySelector('.ins-brand-dd'); if(dd) dd.classList.toggle('open', INS._brandOpen); }
+function insBrandAll(){ INS.brands=[]; INS._brandOpen=true; renderInsights(); }
+function insBrandToggleOne(b,on){ const set=new Set(INS.brands); on?set.add(b):set.delete(b); INS.brands=[...set];
+  if(INS.brands.length && INS.franchise && !INS.brands.includes(brandOf(INS.franchise))) INS.franchise='';
+  INS._brandOpen=true; renderInsights(); }
 function insPreset(which){
   const s=insSpan(), today=isoLocal(ASOF), y=now.getFullYear();
   if(which==='all'){ INS.from=s.mn||INS.from; INS.to=s.mx||today; }
@@ -811,7 +836,7 @@ function insFilter(recs){
   const f=INS;
   return recs.filter(r=>
     (!f.from || r.date>=f.from) && (!f.to || r.date<=f.to) &&
-    (!f.brand || r.brand===f.brand) &&
+    (!f.brands.length || f.brands.includes(r.brand)) &&
     (!f.franchise || r.label===f.franchise) &&
     (!f.platform || r.platform===f.platform));
 }
@@ -841,22 +866,21 @@ function renderInsights(){
   const view=document.getElementById('insightsView'); if(!view) return;
   const all=insDaily();
   const brands=[...new Set(all.map(r=>r.brand))].sort();
-  const franchises=[...new Set(all.filter(r=>!INS.brand||r.brand===INS.brand).map(r=>r.label))].sort();
+  const franchises=[...new Set(all.filter(r=>!INS.brands.length||INS.brands.includes(r.brand)).map(r=>r.label))].sort();
   const cur=insFilter(all);
   // previous-period records (same filters) for MoM compare
   let prevRecs=[];
   if(INS.compare){ const pr=insPrevRange();
     prevRecs=all.filter(r=> r.date>=pr.from && r.date<=pr.to &&
-      (!INS.brand||r.brand===INS.brand) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform)); }
+      (!INS.brands.length||INS.brands.includes(r.brand)) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform)); }
 
-  const brandOpts=['<option value="">All brands</option>'].concat(brands.map(b=>`<option value="${esc(b)}"${b===INS.brand?' selected':''}>${esc(b)}</option>`)).join('');
   const franOpts=['<option value="">All franchises</option>'].concat(franchises.map(f=>`<option value="${esc(f)}"${f===INS.franchise?' selected':''}>${esc(f)}</option>`)).join('');
   const platOpts=[['','All platforms'],['Google','Google'],['LSA','LSA'],['Meta','Meta']].map(p=>`<option value="${p[0]}"${p[0]===INS.platform?' selected':''}>${p[1]}</option>`).join('');
 
   const controls=`<div class="ins-controls">
     <div><label>From</label><input type="date" value="${INS.from}" onchange="setIns('from',this.value)"></div>
     <div><label>To</label><input type="date" value="${INS.to}" onchange="setIns('to',this.value)"></div>
-    <div><label>Brand</label><select onchange="setBrandFilter(this.value)">${brandOpts}</select></div>
+    <div><label>Brand</label>${insBrandDD(brands)}</div>
     <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
     <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>
     <div><label>Compare</label><label class="ins-check"><input type="checkbox" ${INS.compare?'checked':''} onchange="setIns('compare',this.checked)"> vs previous period</label></div>
@@ -869,8 +893,8 @@ function renderInsights(){
     <div><label>Deck</label><button class="primary" onclick="setIns('present',true)" title="Clean, screenshot-friendly layout for the monthly deck">Present mode</button></div>
   </div>`;
 
-  const scopeNote = (INS.brand||INS.franchise||INS.platform)
-    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brand&&('brand '+INS.brand), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}. All tables below reflect this.</div>`
+  const scopeNote = (INS.brands.length||INS.franchise||INS.platform)
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brands.length&&('brand '+insBrandSummary()), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}. All tables below reflect this.</div>`
     : '';
 
   const period=insRangeLabel(), scope=insScopeLabel();
@@ -878,7 +902,7 @@ function renderInsights(){
   const presentHead = INS.present ? `<div class="ins-present-head">
       <div><div class="ins-present-title">${esc(scope)}</div><div class="ins-present-sub">Performance summary · ${esc(period)}${INS.platform?' · '+esc(INS.platform):''}</div></div>
       <div class="ins-present-tools">
-        <select title="Switch brand" onchange="setBrandFilter(this.value)">${brandOpts}</select>
+        ${insBrandDD(brands)}
         <button class="ghost" onclick="setIns('present',false)">Exit present mode</button>
       </div>
     </div>` : '';
@@ -893,8 +917,6 @@ function renderInsights(){
     + (INS.present ? '' : insRawCard(cur));
   drawInsChart();
 }
-// selecting a brand narrows the franchise list, so clear a now-out-of-scope franchise
-function setBrandFilter(b){ INS.brand=b; if(b && INS.franchise && brandOf(INS.franchise)!==b) INS.franchise=''; renderInsights(); }
 // one static rollup table for a given grouping
 function insTable(title, colLabel, cur, prevRecs, keyFn, caption){
   const agg=insAgg(cur, keyFn), prev=INS.compare?insAgg(prevRecs, keyFn):{};
@@ -908,7 +930,7 @@ function insTable(title, colLabel, cur, prevRecs, keyFn, caption){
 }
 // account/scope shown in the chart title (and its copied screenshot)
 function insChartScope(){
-  const acct = INS.franchise || INS.brand || 'All accounts';
+  const acct = INS.franchise || insBrandSummary() || 'All accounts';
   return acct + (INS.platform ? ' · ' + INS.platform : '');
 }
 function insChartCard(){
@@ -1022,7 +1044,7 @@ function drawInsChart(){
   const cv=document.getElementById('insCanvas'); if(!cv) return;
   const yr=String(now.getFullYear());
   const recs=insDaily().filter(r=> r.month.slice(0,4)===yr &&
-    (!INS.brand||r.brand===INS.brand) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
+    (!INS.brands.length||INS.brands.includes(r.brand)) && (!INS.franchise||r.label===INS.franchise) && (!INS.platform||r.platform===INS.platform));
   const byM=insAgg(recs, r=> r.month);
   const cats=[]; for(let m=0;m<=now.getMonth();m++) cats.push(yr+'-'+String(m+1).padStart(2,'0'));
   const leads=cats.map(c=> byM[c]?byM[c].leads:0);
@@ -1056,6 +1078,9 @@ function drawInsChart(){
   ctx.strokeStyle='#c07d12'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(padL+70,H-6); ctx.lineTo(padL+86,H-6); ctx.stroke(); ctx.fillStyle='#6c6b78'; ctx.fillText('CPL', padL+90, H-2);
 }
 window.addEventListener('resize', ()=>{ if(INSIGHTS && document.getElementById('insCanvas')) drawInsChart(); });
+// close the brand checkbox dropdown on an outside click
+document.addEventListener('click', (e)=>{ if(INSIGHTS && INS && INS._brandOpen && !e.target.closest('.ins-brand-dd')){
+  INS._brandOpen=false; const dd=document.querySelector('.ins-brand-dd'); if(dd) dd.classList.remove('open'); } });
 // Gross-up factor: turns ad spend into what the client is billed.
 // Uses each account's own budget split (gross ÷ ad-spend target), so a mixed
 // Google 25% / Meta 20% account grosses up exactly right.
