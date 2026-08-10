@@ -3,7 +3,9 @@
  * -------------------------------------------------------------------------
  * Local Services Ads live in their own MCC and only need SPEND + CONVERSIONS.
  * This is intentionally minimal so it can't choke on LSA-specific campaign
- * types. The franchise key is the ACCOUNT NAME (LSA has no campaign labels here).
+ * types. The franchise key is each account's ACCOUNT LABEL — set in Google Ads to
+ * match the budget sheet (column A) 1:1. Accounts with no franchise label fall back
+ * to the account name (LSA has no campaign labels to roll up here).
  *
  * Window is 365 days ending YESTERDAY, because LSA paces as a running burn-down
  * against the cumulative approved budget (leftover rolls forward), so the app
@@ -15,8 +17,12 @@
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
 var SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE/edit';
-var ACCOUNT_LABEL   = '';    // '' = every account in this MCC (it's LSA-only). Set a label to filter.
+var ACCOUNT_LABEL   = '';    // '' = every account in this MCC (it's LSA-only). Set a label to filter which accounts run.
 var LOOKBACK_DAYS   = 365;
+// Franchise name = each account's Google Ads ACCOUNT LABEL (set to match the budget
+// sheet, column A, 1:1). Status labels below are skipped when picking that label; an
+// account with no franchise label falls back to its name (optionally via ACCOUNT_ALIASES).
+var IGNORE_LABELS   = ['Active', 'Paused', 'DoNotTouch'];
 var ACCOUNT_ALIASES = { /* 'LSA - Something': 'Something', */ };
 /* ─────────────────────────────────────────────────────────────────────────── */
 
@@ -33,6 +39,28 @@ function main() {
   var daily = {}, totals = {}, enabled = {}, allFr = {};
   var acctCount = 0;
 
+  // Resolve each account's franchise from its ACCOUNT LABEL (matches the budget sheet).
+  // Build customerId -> franchise-label-name, skipping the status labels in IGNORE_LABELS.
+  var ignore = {};
+  IGNORE_LABELS.forEach(function (n) { ignore[String(n).toLowerCase()] = true; });
+  var franchiseByCustomer = {};
+  try {
+    var labelIt = AdsManagerApp.accountLabels().get();
+    while (labelIt.hasNext()) {
+      var lbl = labelIt.next(), lname = lbl.getName();
+      if (ignore[lname.toLowerCase()]) continue;
+      var la = lbl.accounts().get();
+      while (la.hasNext()) {
+        var cid = la.next().getCustomerId();
+        if (franchiseByCustomer[cid] && franchiseByCustomer[cid] !== lname)
+          Logger.log('  [' + cid + '] has multiple franchise labels ("' + franchiseByCustomer[cid] + '", "' + lname + '") — using "' + lname + '"');
+        franchiseByCustomer[cid] = lname;
+      }
+    }
+  } catch (e) {
+    Logger.log('account label lookup failed (' + e + ') — falling back to account names');
+  }
+
   var selector = AdsManagerApp.accounts();
   if (ACCOUNT_LABEL) selector = selector.withCondition("LabelNames CONTAINS '" + ACCOUNT_LABEL + "'");
   var accounts = selector.get();
@@ -42,7 +70,7 @@ function main() {
     AdsManagerApp.select(acct);
     acctCount++;
     var rawName = acct.getName() || acct.getCustomerId();
-    var name = ACCOUNT_ALIASES[rawName] || rawName;
+    var name = franchiseByCustomer[acct.getCustomerId()] || ACCOUNT_ALIASES[rawName] || rawName;
     allFr[name] = true;
 
     // (status is derived from recent spend below — LSA campaign resource is unreliable)

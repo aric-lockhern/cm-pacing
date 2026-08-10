@@ -1,0 +1,4 @@
+# The site is the single-file dashboard. There's no build step — just publish
+# the dashboard/ folder so its index.html is served at the site root.
+[build]
+  publish = "dashboard"

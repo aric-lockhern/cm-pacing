@@ -11,22 +11,34 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
+var GATEWAY_VERSION   = '2026-08-10';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
-var SHARED_SECRET     = 'fp_7Kq2mZ9xLw4vRt';   // must match app + ads scripts
+var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
 var SLACK_BOT_TOKEN   = '';                            // xoxb-... with users:read (optional)
 var SLACK_CHANNEL     = '#pacing';                     // display only
+// Last-known data-source sheets. readConfig_ falls back to these when the Config
+// value is blank, so a wiped Config can never silently stop auto-sync again.
+var DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ4VaWdVmQpkMYdtMLU-PFkAG8Q2PA4/edit?gid=0#gid=0';
+var DEFAULT_META_URL   = 'https://docs.google.com/spreadsheets/d/1jmPBXlgQ9do5Iure7zrFrIXW_vv5jxxcu6rmXW-6veo/edit?gid=0#gid=0';
+var DEFAULT_META_TAB   = 'QUERY - RAW DATA';
+var DEFAULT_META_RANGE = 'AH:AR';
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 var TABS = {
   google:     { name: 'Google_Feed',   header: ['Label','Spend','Conv','Clicks','Impr','Revenue','DailyBudget','Status','Updated'] },
+  googleCampaigns:{ name: 'Google_Campaigns', header: ['Label','Campaign','BudgetId','DailyBudget','Status','CampaignId'] },
   dailyG:     { name: 'Daily_Google',  header: ['Date','Label','Spend','Conv','Clicks','Impr','Revenue'] },
   dailyGCamp: { name: 'Daily_Google_Campaign', header: ['Date','Label','Campaign','Spend','Conv','Clicks','Impr','Revenue'] },
   lsa:        { name: 'LSA_Feed',      header: ['Label','Spend','Conv','Status','Updated'] },
   dailyLsa:   { name: 'Daily_LSA',     header: ['Date','Label','Spend','Conv'] },
   metaDaily:  { name: 'Meta_Daily',    header: ['Date','Label','Campaign','Spend','Impressions','Clicks','Leads/Conv','Revenue'] },
+  metaFeed:   { name: 'Meta_Feed',     header: ['Label','DailyBudget','Status','Updated'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
+  budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
+  budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
+  campaignQueue:{ name: 'Campaign_Queue', header: ['Timestamp','Label','Campaign','CampaignId','Action','RequestedBy','Status','AppliedAt','Note'] },
   groups:     { name: 'Groups',        header: ['Label','Group','Hidden','Type','Manager','Updated'] },
   dismissals: { name: 'Dismissals',    header: ['Label','Until','Updated'] },
   team:       { name: 'Team',          header: ['Name','SlackID'] },
@@ -68,6 +80,12 @@ function doGet(e) {
       case 'syncBudgets':  out = syncBudgets_(p); break;
       case 'budgetTabs':   out = budgetTabs_(p.url); break;
       case 'budgetColumns':out = budgetColumns_(p.url, p.tab); break;
+      case 'syncMeta':     out = syncMeta_(p); break;
+      case 'metaPreview':  out = metaPreview_(p.url, p.tab, p.range); break;
+      case 'queueBudget':  out = queueBudget_(p); break;
+      case 'queueCampaign':out = queueCampaign_(p); break;
+      case 'logMove':      out = logMove_(p); break;
+      case 'voidMove':     out = voidMove_(p); break;
       case 'setType':    out = setGroupField_(p.label, 'Type', p.value); break;
       case 'setManager': out = setGroupField_(p.label, 'Manager', p.value); break;
       case 'setHidden':  out = setGroupField_(p.label, 'Hidden', p.value); break;
@@ -153,17 +171,68 @@ function writeCache_(name, str) {
   } catch (e) { /* oversized or unavailable → just skip caching */ }
 }
 
-// Budgets auto-sync at most ONCE PER DAY, across every configured channel.
+// Budgets AND Meta auto-sync at most ONCE PER DAY on the data path, so the tool
+// always shows the latest without anyone pressing Sync. The DataSlayer (Meta) read
+// is a little slow, but it's gated to once per calendar day (lastMetaSync != today),
+// so only the first load each day pays for it — the daily background trigger
+// (dailyAutoSync_, ~6am) usually does it first, making the on-read path a no-op.
 function maybeAutoSync_(cfg) {
-  if (String(cfg.budgetAutoSync) === 'false') return;
-  if (!cfg.budgetSheetUrl || cfg.budgetLabelCol === undefined) return;
-  if (String(cfg.lastBudgetSync || '') === currentDate_()) return;   // already ran today
-  ['google', 'lsa', 'meta'].forEach(function (ch) {
-    var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
-    if (!cfg['budget' + platform + 'Col']) return;                    // channel not mapped
-    try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
-    catch (e) { /* leave that channel's snapshot in place */ }
+  if (String(cfg.budgetAutoSync) !== 'false' &&
+      cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined &&
+      String(cfg.lastBudgetSync || '') !== currentDate_()) {
+    ['google', 'lsa', 'meta'].forEach(function (ch) {
+      var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
+      if (!cfg['budget' + platform + 'Col']) return;                  // channel not mapped
+      try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
+      catch (e) { /* leave that channel's snapshot in place */ }
+    });
+  }
+  // Meta: pull the latest daily DataSlayer data once per day, automatically.
+  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl &&
+      String(cfg.lastMetaSync || '') !== currentDate_()) {
+    try { syncMeta_({ source: 'auto' }); } catch (e) { /* keep the last good Meta snapshot */ }
+  }
+}
+
+// Make sure the daily background sync is scheduled WITHOUT anyone running
+// installDailyTrigger by hand. Checked at most once per day (cheap), self-heals if
+// the trigger was ever removed. Requires the deployment's owner authorization.
+function ensureDailyTrigger_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('trigCheck') === currentDate_()) return;    // already verified today
+    props.setProperty('trigCheck', currentDate_());
+    var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dailyAutoSync_'; });
+    if (!has) ScriptApp.newTrigger('dailyAutoSync_').timeBased().everyDays(1).atHour(6).create();
+  } catch (e) { /* trigger APIs unavailable in this context — the on-read sync still covers freshness */ }
+}
+
+// Run ONCE from the Apps Script editor to schedule the daily background sync, so no
+// user request ever waits on the DataSlayer read. Safe to re-run (replaces itself).
+function installDailyTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyAutoSync_') ScriptApp.deleteTrigger(t);
   });
+  ScriptApp.newTrigger('dailyAutoSync_').timeBased().everyDays(1).atHour(6).create();
+  return 'Daily background sync scheduled (~6am).';
+}
+
+// The scheduled background job: refresh budgets (all mapped channels) + Meta once.
+function dailyAutoSync_() {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var cfg = readConfig_(ss);
+  if (cfg.budgetSheetUrl && cfg.budgetLabelCol !== undefined) {
+    ['google', 'lsa', 'meta'].forEach(function (ch) {
+      var platform = ch === 'lsa' ? 'LSA' : ch === 'meta' ? 'Meta' : 'Google';
+      if (!cfg['budget' + platform + 'Col']) return;
+      try { syncBudgets_({ url: cfg.budgetSheetUrl, tab: cfg.budgetTab, channel: ch, source: 'auto' }); }
+      catch (e) {}
+    });
+  }
+  if (String(cfg.metaAutoSync) !== 'false' && cfg.metaSheetUrl) {
+    try { syncMeta_({ source: 'auto' }); } catch (e) {}
+  }
+  bustCache_();
 }
 
 function getDataString_(force) {
@@ -172,16 +241,23 @@ function getDataString_(force) {
     if (hit) return hit;
   }
   var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  ensureDailyTrigger_();                 // self-schedule the background sync (no manual step)
   maybeAutoSync_(readConfig_(ss));
 
   var payload = {
     ok: true,
+    gatewayVersion: GATEWAY_VERSION,
     generatedAt: new Date().toISOString(),
     google:     readTab_(ss, TABS.google),
+    googleCampaigns: readTab_(ss, TABS.googleCampaigns),
     dailyG:     readTab_(ss, TABS.dailyG),
     lsa:        readTab_(ss, TABS.lsa),
     dailyLsa:   readTab_(ss, TABS.dailyLsa),
     metaDaily:  readTab_(ss, TABS.metaDaily),
+    metaFeed:   readTab_(ss, TABS.metaFeed),
+    budgetQueue:readTab_(ss, TABS.budgetQueue),
+    campaignQueue:readTab_(ss, TABS.campaignQueue),
+    budgetMoves:readTab_(ss, TABS.budgetMoves),
     budgets:    readTab_(ss, TABS.budgets),
     budgetLog:  readTab_(ss, TABS.budgetLog),
     groups:     readTab_(ss, TABS.groups),
@@ -240,6 +316,7 @@ function readTab_(ss, def) {
 function readConfig_(ss) {
   var rows = readTab_(ss, TABS.config);
   var cfg = { googleFee: 0.25, metaFee: 0.20, budgetSheetUrl: '',
+              metaSheetUrl: '', metaTab: '', metaRange: '', metaAutoSync: true,
               emailTo: 'aric@contentmassive.com,larry@contentmassive.com,manuel@contentmassive.com', budgetAutoSync: true,
               lsaFee: 0.20, lsaMonths: 1,
               alertMinLeads: 10, alertLeadsWarn: 0.25, alertLeadsCrit: 0.50,
@@ -249,8 +326,13 @@ function readConfig_(ss) {
     if (k === 'googleFee' || k === 'metaFee' || k === 'lsaFee' || k === 'lsaMonths' || k === 'alertMinLeads' ||
         k === 'alertLeadsWarn' || k === 'alertLeadsCrit' ||
         k === 'alertCplWarn' || k === 'alertCplCrit') cfg[k] = Number(v);
-    else if (k) cfg[k] = v;
+    else if (k && v !== '' && v !== null && v !== undefined) cfg[k] = v;   // don't let a blank cell clobber the default
   });
+  // Coalesce data-source URLs to the last-known defaults so auto-sync never dies on a blank Config.
+  if (!cfg.budgetSheetUrl) cfg.budgetSheetUrl = DEFAULT_BUDGET_URL;
+  if (!cfg.metaSheetUrl)   cfg.metaSheetUrl   = DEFAULT_META_URL;
+  if (!cfg.metaTab)        cfg.metaTab        = DEFAULT_META_TAB;
+  if (!cfg.metaRange)      cfg.metaRange      = DEFAULT_META_RANGE;
   return cfg;
 }
 
@@ -413,6 +495,284 @@ function writeMetaDaily_(rows) {
   });
 }
 
+/* ── Meta sync from the DataSlayer sheet (column-mapped by header) ────────────
+ * The DataSlayer query writes a daily block (Date … On Facebook Leads) somewhere
+ * in a wide tab; we read just that column block (e.g. AH:AP). Franchise = the
+ * Campaign tag, so only campaigns carrying a tag are imported — untagged ones are
+ * skipped (they show as inactive). Meta_Daily is REWRITTEN every sync (rolling
+ * window, like the Google feed), so re-runs never double-count.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+// 'AH:AP' -> { start: 34, width: 9 }  (1-based start column). null if malformed.
+function colBlock_(range) {
+  var m = String(range || '').toUpperCase().replace(/\$/g, '').match(/^([A-Z]+)\s*:\s*([A-Z]+)$/);
+  if (!m) return null;
+  var a = colToNum_(m[1]), b = colToNum_(m[2]);
+  if (!a || !b) return null;
+  var start = Math.min(a, b), end = Math.max(a, b);
+  return { start: start, width: end - start + 1 };
+}
+function colToNum_(s) {
+  s = String(s || '').toUpperCase(); var n = 0;
+  for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i) - 64; if (c < 1 || c > 26) return 0; n = n * 26 + c; }
+  return n;
+}
+
+// Locate each KPI column within the block's header row (by name, with a few aliases).
+function metaColMap_(H) {
+  function pick(al) { for (var i = 0; i < al.length; i++) { if (H[al[i]] !== undefined) return H[al[i]]; } return -1; }
+  var map = {
+    date:     pick(['Date', 'Day']),
+    tag:      pick(['Campaign tags', 'Campaign tag', 'Tags', 'Tag']),
+    campaign: pick(['Campaign name', 'Campaign']),
+    spend:    pick(['Total Cost', 'Cost', 'Amount spent', 'Spend']),
+    impr:     pick(['Impressions', 'Impr']),
+    clicks:   pick(['Clicks', 'Link clicks']),
+    webConv:  pick(['Website conversions', 'Web conversions', 'Website Conversions']),
+    fbLeads:  pick(['On Facebook Leads', 'On-Facebook Leads', 'Facebook Leads', 'Leads']),
+    dailyBudget: pick(['Daily budget', 'Daily Budget', 'Budget']),         // optional
+    status:      pick(['Campaign status', 'Status', 'Effective status'])   // optional
+  };
+  var missing = [];
+  ['date', 'tag', 'campaign', 'spend'].forEach(function (k) { if (map[k] < 0) missing.push(k); });
+  map.missing = missing;
+  return map;
+}
+
+// True for a tag cell that means "no franchise" (skip the row).
+function metaNoTag_(tag) {
+  var t = String(tag || '').trim();
+  return t === '' || t === '--' || t.toLowerCase() === 'n/a';
+}
+
+function metaSource_(p, cfg) {
+  return {
+    url:   p.url   || cfg.metaSheetUrl,
+    tab:   p.tab   || cfg.metaTab   || 'QUERY - RAW DATA',
+    range: p.range || cfg.metaRange || 'AH:AR'
+  };
+}
+
+// Read-only peek so the app can show what WOULD import before committing.
+function metaPreview_(url, tab, range) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var s = metaSource_({ url: url, tab: tab, range: range }, readConfig_(ss));
+  if (!s.url) return { ok: false, error: 'no Meta sheet url' };
+  var src;
+  try { src = SpreadsheetApp.openByUrl(s.url); }
+  catch (e) { return { ok: false, error: 'cannot open Meta sheet (share it with this account): ' + e }; }
+  var t = src.getSheetByName(s.tab);
+  if (!t) return { ok: false, error: 'tab "' + s.tab + '" not found' };
+  var block = colBlock_(s.range);
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AR)' };
+  var lastRow = t.getLastRow();
+  if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
+
+  var values = t.getRange(1, block.start, Math.min(lastRow, 1000), block.width).getValues();  // sample
+  var col = metaColMap_(headIndex_(values[0].map(function (h) { return String(h).trim(); })));
+  if (col.missing.length) return { ok: false, columns: values[0], error: 'missing columns in ' + s.range + ': ' + col.missing.join(', ') };
+
+  var tags = {}, tagged = 0, noTag = 0;
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    if (String(row[col.campaign] || '').trim() === '' && parseNumber_(row[col.spend]) == null) continue;  // spacer
+    if (metaNoTag_(row[col.tag])) { noTag++; continue; }
+    tags[String(row[col.tag]).trim()] = true; tagged++;
+  }
+  return { ok: true, columns: values[0], franchises: Object.keys(tags).sort(), tagged: tagged, noTag: noTag };
+}
+
+function syncMeta_(p) {
+  p = p || {};
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var s = metaSource_(p, readConfig_(ss));
+  if (!s.url) return { ok: false, error: 'no Meta sheet url' };
+
+  var src;
+  try { src = SpreadsheetApp.openByUrl(s.url); }
+  catch (e) { return { ok: false, error: 'cannot open Meta sheet (share it with this account): ' + e }; }
+  var tab = src.getSheetByName(s.tab);
+  if (!tab) return { ok: false, error: 'tab "' + s.tab + '" not found' };
+  var block = colBlock_(s.range);
+  if (!block) return { ok: false, error: 'bad range "' + s.range + '" (use e.g. AH:AR)' };
+  var lastRow = tab.getLastRow();
+  if (lastRow < 2) return { ok: false, error: 'tab "' + s.tab + '" has no rows' };
+
+  var values = tab.getRange(1, block.start, lastRow, block.width).getValues();
+  var col = metaColMap_(headIndex_(values[0].map(function (h) { return String(h).trim(); })));
+  if (col.missing.length) return { ok: false, error: 'missing columns in ' + s.range + ': ' + col.missing.join(', ') };
+
+  var out = [], skipped = 0, tags = {};
+  var feedByDate = {};   // date -> { tag -> {budget, active} }  (for the latest-day feed)
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var camp = String(row[col.campaign] || '').trim();
+    var spendRaw = parseNumber_(row[col.spend]);
+    if (!camp && spendRaw == null) continue;                       // blank spacer row
+    if (metaNoTag_(row[col.tag])) { skipped++; continue; }         // no tag → inactive, excluded
+    var date = normalize_(row[col.date]);
+    if (!date) continue;
+    var tag = String(row[col.tag]).trim();
+    var impr = col.impr   < 0 ? 0 : (parseNumber_(row[col.impr])   || 0);
+    var clk  = col.clicks < 0 ? 0 : (parseNumber_(row[col.clicks]) || 0);
+    var conv = (col.webConv < 0 ? 0 : (parseNumber_(row[col.webConv]) || 0)) +
+               (col.fbLeads < 0 ? 0 : (parseNumber_(row[col.fbLeads]) || 0));
+    out.push([date, tag, camp, round2_(spendRaw || 0), impr, clk, round2_(conv), 0]);
+    tags[tag] = true;
+
+    // feed: per franchise per day, sum ACTIVE campaigns' daily budget + set active flag
+    var isActive = col.status < 0 ? true : (String(row[col.status] || '').trim().toUpperCase() === 'ACTIVE');
+    var db = col.dailyBudget < 0 ? 0 : (parseNumber_(row[col.dailyBudget]) || 0);
+    var fb = (feedByDate[date] = feedByDate[date] || {});
+    var ft = (fb[tag] = fb[tag] || { budget: 0, active: false });
+    if (isActive) { ft.budget += db; ft.active = true; }
+  }
+
+  // Full rewrite of Meta_Daily (rolling window; never stacks duplicates on re-sync).
+  var mt = ss.getSheetByName(TABS.metaDaily.name) || ss.insertSheet(TABS.metaDaily.name);
+  mt.clearContents();
+  var body = [TABS.metaDaily.header].concat(out);
+  mt.getRange(1, 1, body.length, TABS.metaDaily.header.length).setValues(body);
+  forceText_(mt, TABS.metaDaily);
+
+  // Meta feed = each franchise's status/daily-budget from its MOST RECENT day in the
+  // data. Using the latest day (not "active on any of the last N days") means a
+  // campaign you just paused shows paused immediately instead of lingering as active.
+  // A franchise is active if any of its campaigns is ACTIVE on that latest day; daily
+  // budget = its active campaigns' budget that day. Franchises with no rows aren't
+  // written, so the app treats them as not running (paused).
+  var feedRows = [], now = new Date();
+  var latest = {};   // tag -> { day, budget, active }  (its most recent day present)
+  Object.keys(feedByDate).sort().forEach(function (d) {   // ascending → last write wins = latest day
+    var fmap = feedByDate[d];
+    Object.keys(fmap).forEach(function (tg) {
+      var cur = latest[tg];
+      if (!cur || d >= cur.day) latest[tg] = { day: d, budget: fmap[tg].budget, active: fmap[tg].active };
+    });
+  });
+  Object.keys(latest).sort().forEach(function (tg) {
+    feedRows.push([tg, round2_(latest[tg].budget), latest[tg].active ? 'active' : 'paused', now]);
+  });
+  var mf = ss.getSheetByName(TABS.metaFeed.name) || ss.insertSheet(TABS.metaFeed.name);
+  mf.clearContents();
+  var fbody = [TABS.metaFeed.header].concat(feedRows);
+  mf.getRange(1, 1, fbody.length, TABS.metaFeed.header.length).setValues(fbody);
+
+  setConfigMany_({ metaSheetUrl: s.url, metaTab: s.tab, metaRange: s.range, lastMetaSync: currentDate_() });
+  bustCache_();
+  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped, feed: feedRows.length };
+}
+
+function round2_(n) { return Math.round(Number(n) * 100) / 100; }
+
+/* ── budget queue (pacing auto-adjust) ───────────────────────────────────────
+ * The app writes a requested per-franchise daily budget here; the hourly Google
+ * Ads "budget_apply" script reads PENDING rows, applies them to campaigns within
+ * safety limits, and writes back status + emails a summary. We supersede any older
+ * pending request for the same franchise so only the newest is applied. */
+function queueBudget_(p) {
+  var label = String((p && p.label) || '').trim();
+  var amt = Number(p && p.amount);
+  if (!label) return { ok: false, error: 'no franchise' };
+  if (isNaN(amt) || amt < 0) return { ok: false, error: 'bad amount' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetQueue.name) || ss.insertSheet(TABS.budgetQueue.name);
+  ensureHeader_(tab, TABS.budgetQueue);
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  var changed = false;
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][h.Label]).trim().toLowerCase() === label.toLowerCase() &&
+        String(vals[i][h.Status]).trim().toLowerCase() === 'pending') {
+      vals[i][h.Status] = 'superseded'; vals[i][h.Note] = 'replaced by a newer request'; changed = true;
+    }
+  }
+  if (changed) tab.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+  tab.appendRow([new Date(), label, round2_(amt), String((p && p.by) || ''), 'pending', '', '']);
+  bustCache_();
+  return { ok: true };
+}
+
+/* ── campaign pause / activate queue ──────────────────────────────────────────
+ * The app's Pause/Activate buttons append a PENDING row here; the hourly apply
+ * script drains it, pauses/enables the campaign, and writes the status back. */
+function queueCampaign_(p) {
+  var label = String((p && p.label) || '').trim();
+  var camp = String((p && p.campaign) || '').trim();
+  var cid = String((p && p.campaignId) || '').trim();
+  var act = String((p && p.do) || '').trim().toLowerCase();   // 'pause' | 'enable'
+  if (!camp && !cid) return { ok: false, error: 'no campaign' };
+  if (act !== 'pause' && act !== 'enable') return { ok: false, error: 'bad action' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.campaignQueue.name) || ss.insertSheet(TABS.campaignQueue.name);
+  ensureHeader_(tab, TABS.campaignQueue);
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  var changed = false;
+  for (var i = 1; i < vals.length; i++) {                     // supersede older pending for the same campaign
+    var sameId = cid && String(vals[i][h.CampaignId]).trim() === cid;
+    var sameNm = !cid && String(vals[i][h.Campaign]).trim().toLowerCase() === camp.toLowerCase()
+                      && String(vals[i][h.Label]).trim().toLowerCase() === label.toLowerCase();
+    if ((sameId || sameNm) && String(vals[i][h.Status]).trim().toLowerCase() === 'pending') {
+      vals[i][h.Status] = 'superseded'; vals[i][h.Note] = 'replaced by a newer request'; changed = true;
+    }
+  }
+  if (changed) tab.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+  var row = tab.getLastRow() + 1;
+  tab.appendRow([new Date(), label, camp, cid, act, String((p && p.by) || ''), 'pending', '', '']);
+  tab.getRange(row, 4).setNumberFormat('@').setValue(cid);   // CampaignId as text (preserve big ids exactly)
+  bustCache_();
+  return { ok: true };
+}
+
+/* ── budget moves (channel reallocation ledger) ──────────────────────────────
+ * A move records that $Amount of a franchise's monthly budget was shifted from
+ * one channel to another (e.g. Google → LSA). It NEVER edits the master billing
+ * sheet — the client's total bill is unchanged. The app applies the net move on
+ * top of the synced budgets so per-channel pacing reflects reality. Reversible
+ * by voiding the row. */
+function logMove_(p) {
+  var month = String((p && p.month) || '').trim();
+  var fr = String((p && p.franchise) || '').trim();
+  var from = String((p && p.from) || '').trim();
+  var to = String((p && p.to) || '').trim();
+  var amt = Number(p && p.amount);
+  if (!/^\d{4}-\d{2}$/.test(month)) return { ok: false, error: 'bad month (YYYY-MM)' };
+  if (!fr) return { ok: false, error: 'no franchise' };
+  if (!from || !to) return { ok: false, error: 'need from + to channel' };
+  if (from.toLowerCase() === to.toLowerCase()) return { ok: false, error: 'from and to are the same channel' };
+  if (isNaN(amt) || amt <= 0) return { ok: false, error: 'bad amount' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetMoves.name) || ss.insertSheet(TABS.budgetMoves.name);
+  ensureHeader_(tab, TABS.budgetMoves);
+  var id = 'mv' + (new Date()).getTime();
+  var row = tab.getLastRow() + 1;
+  tab.appendRow([id, new Date(), month, fr, from, to, round2_(amt), String((p && p.by) || ''), String((p && p.note) || ''), '']);
+  // Month is column 3 — force it to plain text so Sheets doesn't coerce '2026-08' into a date.
+  tab.getRange(row, 3).setNumberFormat('@').setValue(month);
+  bustCache_();
+  return { ok: true, id: id };
+}
+
+function voidMove_(p) {
+  var id = String((p && p.id) || '').trim();
+  if (!id) return { ok: false, error: 'no id' };
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.budgetMoves.name);
+  if (!tab) return { ok: false, error: 'no moves tab' };
+  var vals = tab.getDataRange().getValues();
+  var h = headIndex_(vals[0]);
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][h.Id]).trim() === id) {
+      vals[i][h.Void] = 'TRUE';
+      tab.getRange(i + 1, h.Void + 1).setValue('TRUE');
+      bustCache_();
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'id not found' };
+}
+
 /* ── budget sync from a linked sheet (column-mapped) ─────────────────────── */
 
 // List the tab names in the linked workbook so the app can let you pick one.
@@ -462,15 +822,13 @@ function syncBudgets_(p) {
   var colKey   = 'budget' + platform + 'Col';                 // budgetGoogleCol / budgetLsaCol / budgetMetaCol
 
   var labelCol  = p.labelCol != null && p.labelCol !== '' ? Number(p.labelCol) : Number(cfg.budgetLabelCol);
-  // budgetCol can be a single index OR a comma list of indexes (LSA pool = sum of months)
+  // budgetCol can be a single index OR a comma list of month columns (newest last).
+  // Each column maps to a month; LSA also sums them into a running 'pool'.
   var budgetSpec = (p.budgetCol != null && p.budgetCol !== '') ? String(p.budgetCol) : String(cfg[colKey] || '');
   var amountCols = budgetSpec.split(',').map(function (x) { return Number(String(x).trim()); }).filter(function (x) { return !isNaN(x); });
-  // LSA is a running pool (leftover rolls forward) → one month-agnostic row
-  var month = channel === 'lsa' ? 'pool' : (p.month || currentMonth_());
   if (isNaN(labelCol) || !amountCols.length) {
     return { ok: false, error: 'pick a label column and a budget column first' };
   }
-  var sumCols = amountCols.length > 1;   // LSA: sum multiple month columns into one pool
 
   var src;
   try { src = SpreadsheetApp.openByUrl(url); }
@@ -481,57 +839,44 @@ function syncBudgets_(p) {
   var values = srcTab.getDataRange().getValues();
   if (values.length < 2) return { ok: false, error: 'tab "' + srcTab.getName() + '" has no rows' };
 
-  var parsed = [];
+  // Map each budget column to a MONTH — chronological, with the LAST column = the
+  // current month (append the newest month at the end). A single column is just the
+  // current month. This preserves each past month's billed instead of overwriting it.
+  // LSA additionally keeps a summed 'pool' row for its burn-down view.
+  var curMonth = p.month || currentMonth_();
+  var nCols = amountCols.length;
+  var colMonth = amountCols.map(function (_, i) { return monthOffset_(curMonth, -(nCols - 1 - i)); });
+
+  var byMonth = {};                     // month -> [{label, amount}]
+  colMonth.forEach(function (m) { byMonth[m] = []; });
+  var poolRows = [];                    // LSA only: sum across the listed months
   for (var r = 1; r < values.length; r++) {
     var label = String(values[r][labelCol] || '').trim();
     if (!label) continue;
-    var amt = 0, any = false;
+    var poolAmt = 0, anyPool = false;
     for (var ci = 0; ci < amountCols.length; ci++) {
       var v = parseNumber_(values[r][amountCols[ci]]);
-      if (v != null) { amt += v; any = true; }
+      if (v == null) continue;
+      byMonth[colMonth[ci]].push({ label: label, amount: v });
+      poolAmt += v; anyPool = true;
     }
-    if (!any) continue;
-    parsed.push({ label: label, amount: amt });
+    if (channel === 'lsa' && anyPool) poolRows.push({ label: label, amount: poolAmt });
   }
+  if (channel === 'lsa') byMonth['pool'] = poolRows;
 
-  // rebuild Budgets tab: keep everything except this month+platform, then add fresh.
-  // Capture existing amounts for this month+platform first, to detect changes.
-  var bt = ss.getSheetByName(TABS.budgets.name) || ss.insertSheet(TABS.budgets.name);
-  ensureHeader_(bt, TABS.budgets);
-  var bvals = bt.getDataRange().getValues();
-  var head = headIndex_(bvals[0]);
-  var existing = {};   // label(lower) -> amount
-  var keep = [TABS.budgets.header];
-  for (var i = 1; i < bvals.length; i++) {
-    var row = bvals[i];
-    if (row.every(function (c) { return c === '' || c === null; })) continue;
-    var sameMonth = String(row[head.Month]).trim() === month;
-    var samePlat  = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
-    if (sameMonth && samePlat) {
-      existing[String(row[head.Label]).trim().toLowerCase()] = Number(row[head['Total Budget']]) || 0;
-      continue; // will be replaced
-    }
-    keep.push(row);
-  }
-
-  // diff: only amount CHANGES to labels that already had a budget (not first-time adds)
+  // change detection: only for the CURRENT month (editing history shouldn't fire alerts)
+  var existing = readBudgetMonth_(ss, platform, curMonth);
   var changes = [];
-  parsed.forEach(function (x) {
+  (byMonth[curMonth] || []).forEach(function (x) {
     var k = x.label.toLowerCase();
     if (existing.hasOwnProperty(k) && Math.abs(existing[k] - x.amount) >= 0.01) {
       changes.push({ label: x.label, old: existing[k], now: x.amount });
     }
   });
 
-  var now = new Date();
-  parsed.forEach(function (x) { keep.push([x.label, platform, month, x.amount, now]); });
+  writeBudgetMonths_(ss, platform, byMonth);   // one rebuild, replacing every listed (platform, month) + LSA pool
 
-  bt.clearContents();
-  bt.getRange(1, 1, keep.length, TABS.budgets.header.length).setValues(keep);
-  forceText_(bt, TABS.budgets);
-
-  // record + notify on real changes
-  if (changes.length) logBudgetChanges_(ss, changes, platform, month, p.source || 'manual');
+  if (changes.length) logBudgetChanges_(ss, changes, platform, curMonth, p.source || 'manual');
 
   // remember the picks per channel (one batched write)
   var save = {
@@ -544,7 +889,57 @@ function syncBudgets_(p) {
   if (channel === 'lsa') save.lsaMonths = amountCols.length;
   setConfigMany_(save);
 
-  return { ok: true, synced: parsed.length, month: month, platform: platform, channel: channel, changed: changes.length };
+  return { ok: true, synced: (byMonth[curMonth] || []).length, month: curMonth,
+           platform: platform, channel: channel, changed: changes.length, months: colMonth.length };
+}
+
+// Shift a 'YYYY-MM' month string by delta months.
+function monthOffset_(ym, delta) {
+  var p = ym.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1 + delta, 1);
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM');
+}
+
+// Existing budget amounts for one (platform, month): label(lower) -> amount.
+function readBudgetMonth_(ss, platform, month) {
+  var out = {};
+  var bt = ss.getSheetByName(TABS.budgets.name);
+  if (!bt) return out;
+  var v = bt.getDataRange().getValues();
+  if (v.length < 2) return out;
+  var h = headIndex_(v[0]);
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][h.Platform]).trim().toLowerCase() === platform.toLowerCase() &&
+        String(v[i][h.Month]).trim() === month) {
+      out[String(v[i][h.Label]).trim().toLowerCase()] = Number(v[i][h['Total Budget']]) || 0;
+    }
+  }
+  return out;
+}
+
+// Rebuild the Budgets tab, replacing every (platform, month) row for the months that
+// appear as keys in byMonth (including 'pool'); all other rows are left untouched.
+function writeBudgetMonths_(ss, platform, byMonth) {
+  var bt = ss.getSheetByName(TABS.budgets.name) || ss.insertSheet(TABS.budgets.name);
+  ensureHeader_(bt, TABS.budgets);
+  var bvals = bt.getDataRange().getValues();
+  var head = headIndex_(bvals[0]);
+  var keep = [TABS.budgets.header];
+  for (var i = 1; i < bvals.length; i++) {
+    var row = bvals[i];
+    if (row.every(function (c) { return c === '' || c === null; })) continue;
+    var samePlat = String(row[head.Platform]).trim().toLowerCase() === platform.toLowerCase();
+    var m = String(row[head.Month]).trim();
+    if (samePlat && byMonth.hasOwnProperty(m)) continue;   // replaced below
+    keep.push(row);
+  }
+  var now = new Date();
+  Object.keys(byMonth).forEach(function (m) {
+    byMonth[m].forEach(function (x) { keep.push([x.label, platform, m, x.amount, now]); });
+  });
+  bt.clearContents();
+  bt.getRange(1, 1, keep.length, TABS.budgets.header.length).setValues(keep);
+  forceText_(bt, TABS.budgets);
 }
 
 // Append change rows to Budget_Changes and email the flag recipients.
