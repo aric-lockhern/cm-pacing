@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-11';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-09-04';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -23,6 +23,10 @@ var DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ
 var DEFAULT_META_URL   = 'https://docs.google.com/spreadsheets/d/1jmPBXlgQ9do5Iure7zrFrIXW_vv5jxxcu6rmXW-6veo/edit?gid=0#gid=0';
 var DEFAULT_META_TAB   = 'QUERY - RAW DATA';
 var DEFAULT_META_RANGE = 'AH:AR';
+// The month of the LEFTMOST budget column in the sheet (this deployment started
+// Jan 2026). The column list auto-extends from here, so new months never need a
+// manual Settings edit. Change it only if the first column's month changes.
+var DEFAULT_BUDGET_FIRST_MONTH = '2026-01';
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 var TABS = {
@@ -317,7 +321,7 @@ function readTab_(ss, def) {
 
 function readConfig_(ss) {
   var rows = readTab_(ss, TABS.config);
-  var cfg = { googleFee: 0.25, metaFee: 0.20, budgetSheetUrl: '',
+  var cfg = { googleFee: 0.25, metaFee: 0.20, budgetSheetUrl: '', budgetFirstMonth: DEFAULT_BUDGET_FIRST_MONTH,
               metaSheetUrl: '', metaTab: '', metaRange: '', metaAutoSync: true,
               emailTo: 'aric@contentmassive.com,larry@contentmassive.com,manuel@contentmassive.com', budgetAutoSync: true,
               lsaFee: 0.20, lsaMonths: 1,
@@ -841,13 +845,24 @@ function syncBudgets_(p) {
   var values = srcTab.getDataRange().getValues();
   if (values.length < 2) return { ok: false, error: 'tab "' + srcTab.getName() + '" has no rows' };
 
-  // Map each budget column to a MONTH — chronological, with the LAST column = the
-  // current month (append the newest month at the end). A single column is just the
-  // current month. This preserves each past month's billed instead of overwriting it.
-  // LSA additionally keeps a summed 'pool' row for its burn-down view.
+  // Map each budget column to a MONTH, anchored to a fixed FIRST month (the leftmost
+  // column). column[i] = month (firstMonth + i). This never drifts when a new calendar
+  // month begins — and the list AUTO-EXTENDS to cover the current month by following
+  // its own stride (newest col = previous newest + the gap between the last two), so a
+  // new month is picked up WITHOUT anyone editing Settings. Existing columns are never
+  // touched; only new months are appended. LSA also keeps a summed 'pool' row.
   var curMonth = p.month || currentMonth_();
+  var firstMonth = cfg.budgetFirstMonth || DEFAULT_BUDGET_FIRST_MONTH;
+  var needed = monthDiff_(firstMonth, curMonth) + 1;          // months from first→current, inclusive
+  var extended = false;
+  if (needed > amountCols.length && amountCols.length >= 2 && needed <= amountCols.length + 24) {
+    var stride = amountCols[amountCols.length - 1] - amountCols[amountCols.length - 2];
+    while (amountCols.length < needed) amountCols.push(amountCols[amountCols.length - 1] + stride);
+    budgetSpec = amountCols.join(',');                        // persisted below so it stays extended
+    extended = true;
+  }
   var nCols = amountCols.length;
-  var colMonth = amountCols.map(function (_, i) { return monthOffset_(curMonth, -(nCols - 1 - i)); });
+  var colMonth = amountCols.map(function (_, i) { return monthOffset_(firstMonth, i); });
 
   var byMonth = {};                     // month -> [{label, amount}]
   colMonth.forEach(function (m) { byMonth[m] = []; });
@@ -888,10 +903,11 @@ function syncBudgets_(p) {
     lastBudgetSync: currentDate_()
   };
   save[colKey] = budgetSpec;
+  if (!cfg.budgetFirstMonth) save.budgetFirstMonth = firstMonth;   // pin the anchor so it's visible + stable
   if (channel === 'lsa') save.lsaMonths = amountCols.length;
   setConfigMany_(save);
 
-  return { ok: true, synced: (byMonth[curMonth] || []).length, month: curMonth,
+  return { ok: true, synced: (byMonth[curMonth] || []).length, month: curMonth, extended: extended,
            platform: platform, channel: channel, changed: changes.length, months: colMonth.length };
 }
 
@@ -900,6 +916,11 @@ function monthOffset_(ym, delta) {
   var p = ym.split('-');
   var d = new Date(Number(p[0]), Number(p[1]) - 1 + delta, 1);
   return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM');
+}
+// Whole months from a→b ('YYYY-MM'). Negative if b is before a.
+function monthDiff_(a, b) {
+  var pa = a.split('-'), pb = b.split('-');
+  return (Number(pb[0]) - Number(pa[0])) * 12 + (Number(pb[1]) - Number(pa[1]));
 }
 
 // Existing budget amounts for one (platform, month): label(lower) -> amount.
