@@ -48,6 +48,11 @@
 
   /* alerts */
   .alerts{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+  .urgentbanner{border:2px solid var(--bad);background:#fdecea;border-radius:10px;padding:12px 15px;margin-bottom:14px}
+  .urgentbanner .ub-h{font-weight:800;color:var(--bad);font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .urgentbanner .ub-row{font-size:13px;padding:2px 0;color:var(--ink)}
+  .urgentbanner .ub-row b{color:var(--bad)}
+  .row-nobudget{color:#fff;background:var(--bad);border-color:var(--bad);font-weight:700}
   .budgetbanner{border:1px solid var(--accent);background:#fff6f0;border-radius:10px;padding:11px 14px;margin-bottom:14px}
   .budgetbanner .bb-h{font-weight:700;color:var(--accent);font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:7px}
   .budgetbanner .bb-row{font-size:13px;padding:2px 0;color:var(--ink)}
@@ -266,6 +271,7 @@
 </header>
 
 <main>
+  <div id="urgentBanner"></div>
   <div id="totals" class="totals"></div>
   <div id="integrityNote" class="integrity-note"></div>
 
@@ -381,7 +387,7 @@
         <span id="syncMsg" class="muted"></span>
       </div>
     </div>
-    <div class="hint">One account column (e.g. <b>A</b>), then the budget column(s) for each channel. Any channel can take a <b>comma-separated list of month columns</b> (e.g. <b>P,Q,R</b>) — <b>newest month last</b>; each column is stored as that month's billed, so the Overview keeps full month-by-month history. A single letter = just the current month. LSA additionally sums its months into a running pool for burn-down pacing. Each month, <b>append the new month's column</b> (don't overwrite) so history is preserved. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Share the sheet with the account that runs the gateway.</div>
+    <div class="hint">One account column (e.g. <b>A</b>), then the budget column(s) for each channel. Any channel can take a <b>comma-separated list of month columns</b> (e.g. <b>P,Q,R</b>) — <b>newest month last</b>; the leftmost column is the <b>first month</b> (Jan 2026) and each column maps to the next month, so the Overview keeps full month-by-month history. <b>New months are added automatically</b> — the list auto-extends to the current month by following its own column stride, so you no longer append a column each month. (If a month's column ever lands wrong, just fix that channel's list once and it re-anchors.) LSA additionally sums its months into a running pool for burn-down pacing. Budgets auto-sync <b>once a day</b>; Sync any time you change the sheet. Share the sheet with the account that runs the gateway.</div>
 
     <h3 style="margin:14px 0 4px">Meta / Facebook import</h3>
     <div class="hint">Pulls daily Meta spend + metrics from your DataSlayer sheet into the tool. Franchise = the <b>Campaign tag</b> — campaigns with no tag are ignored (they show as inactive). Share the DataSlayer sheet with the account that runs the gateway. <b>Auto-updates every day on its own</b> (a background job at ~6am, plus a catch-up on the first app load each day) — you only need <b>Sync</b> if the columns/range change.</div>
@@ -492,7 +498,7 @@ let EXEC_DATA = null;
 let EXEC_CHART_MODE = 'time';
 let INSIGHTS = false;   // Insights (analytics) tab open
 // Elements that make up the normal (per-channel) view, hidden while Exec is open.
-const MAIN_ELS = ['totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
+const MAIN_ELS = ['urgentBanner','totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
 function showMain(on){ MAIN_ELS.forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = on?'':'none'; }); }
 
 // Account (brand) = the part before " - " in a franchise label, with a couple of
@@ -1696,10 +1702,42 @@ function render(){
   document.getElementById('hSpend').textContent  = isLSA ? (MARKUP?'Billed to date':'Spent to date') : (MARKUP ? 'MTD Billed' : 'MTD Ad Spend');
   document.getElementById('hTarget').textContent = isLSA ? (MARKUP?'Approved pool':'Ad Spend Pool') : (MARKUP ? 'Budget' : 'Ad Spend Target');
   document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
+  renderUrgent();
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
   renderRows();
+}
+
+// URGENT: anyone SPENDING this month with NO budget on record, across EVERY channel.
+// We should never spend without an approved budget — usually it means a month's budget
+// column wasn't pulled in. Shown loud at the very top until it's resolved.
+function spendNoBudget(){
+  if(!DATA) return [];
+  const out=[];
+  const check=(rows, platform)=>{
+    const bud={};
+    (DATA.budgets||[]).forEach(r=>{ if(key(r.Platform)!==key(platform)) return;
+      if(String(r.Month).trim()!==MONTH) return;   // this calendar month's budget
+      bud[key(r.Label)]=(bud[key(r.Label)]||0)+(Number(r['Total Budget'])||0); });
+    const spend={}, disp={};
+    (rows||[]).forEach(r=>{ const d=String(r.Date).slice(0,10); if(d.slice(0,7)!==MONTH) return;
+      const k=key(r.Label); if(IGNORE_FRANCHISES.has(k)) return;
+      spend[k]=(spend[k]||0)+(Number(r.Spend)||0); disp[k]=String(r.Label).trim(); });
+    Object.keys(spend).forEach(k=>{ if(spend[k]>0.5 && !(bud[k]>0)) out.push({label:disp[k]||k, platform, spend:spend[k]}); });
+  };
+  check(DATA.dailyG,   'Google');
+  check(DATA.dailyLsa, 'LSA');
+  check(DATA.metaDaily,'Meta');
+  return out.sort((a,b)=> b.spend-a.spend);
+}
+function renderUrgent(){
+  const el=document.getElementById('urgentBanner'); if(!el) return;
+  const hits=spendNoBudget();
+  if(!hits.length){ el.innerHTML=''; return; }
+  const rows=hits.map(h=>`<div class="ub-row"><b>${esc(h.label)}</b> · ${esc(h.platform)} — spending <b>${money(h.spend)}</b> this month with <b>no budget on record</b></div>`).join('');
+  el.innerHTML=`<div class="urgentbanner"><div class="ub-h">⚠ Spending with NO budget — ${hits.length} account${hits.length===1?'':'s'} (${MONTH})</div>${rows}
+    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">We should never spend without an approved budget. Most often this means ${MONTH}'s budget column wasn't pulled in — check <b>Settings ▸ Budgets</b> (columns now auto-extend after redeploy), or confirm the budget in the master sheet.</div></div>`;
 }
 
 function renderTotals(){
@@ -1837,8 +1875,10 @@ function renderRows(){
     const recBadge = r.rec
       ? `<span class="badge ${r.rec.dir==='up'?'b-grow':'b-warn'}" style="cursor:pointer" title="Budget recommendation — click the name to review" onclick="openDD('${r.k}')">${r.rec.dir==='up'?'▲':'▼'} budget</span>`
       : (r.opp?`<span class="badge b-grow" style="cursor:pointer" title="Opportunity — click the name to review" onclick="openDD('${r.k}')">✨</span>`:'');
+    const noBudBadge = (r.spend>0.5 && !r.hasBudget)
+      ? `<span class="badge row-nobudget" title="Spending with no budget on record this month — check Settings ▸ Budgets">⚠ no budget</span>` : '';
     return `<tr${r.hidden?' style="opacity:.55"':''}>
-      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${badge}${recBadge}${hidBadge}</div></td>
+      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${noBudBadge}${badge}${recBadge}${hidBadge}</div></td>
       <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
       <td>${r.live?'<span class="pos">active</span>':'<span class="muted">paused</span>'}</td>
       <td>${money(r.spend*F)}</td>
