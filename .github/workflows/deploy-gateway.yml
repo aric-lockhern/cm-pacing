@@ -1,0 +1,78 @@
+name: Deploy gateway (Apps Script)
+
+# Pushes apps-script/sheet_gateway.gs to the Apps Script project and updates the
+# existing web-app deployment in place (same /exec URL), on every merge to main
+# that touches the gateway. Manual runs are allowed via "Run workflow".
+#
+# Requires these repo secrets (Settings ▸ Secrets and variables ▸ Actions):
+#   CLASPRC_JSON       – contents of ~/.clasprc.json after `clasp login` locally
+#   GAS_SCRIPT_ID      – Apps Script ▸ Project Settings ▸ IDs ▸ Script ID
+#   GAS_DEPLOYMENT_ID  – the web app's deployment id (Deploy ▸ Manage deployments)
+# And: enable the Apps Script API for the deploying Google account at
+#   https://script.google.com/home/usersettings
+# Until all three secrets exist, the job succeeds but skips (no-op).
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps-script/**']
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-gateway
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets are configured
+        id: check
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$GAS_SCRIPT_ID" ] || [ -z "$GAS_DEPLOYMENT_ID" ]; then
+            echo "::notice::Gateway deploy skipped — add CLASPRC_JSON, GAS_SCRIPT_ID and GAS_DEPLOYMENT_ID secrets to enable it."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.ready == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.ready == 'true'
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        if: steps.check.outputs.ready == 'true'
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        if: steps.check.outputs.ready == 'true'
+        run: printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+
+      - name: Write .clasp.json (project link)
+        if: steps.check.outputs.ready == 'true'
+        working-directory: apps-script
+        run: printf '{"scriptId":"%s","rootDir":"."}' "$GAS_SCRIPT_ID" > .clasp.json
+        env:
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+
+      - name: Push source to Apps Script
+        if: steps.check.outputs.ready == 'true'
+        working-directory: apps-script
+        run: clasp push --force
+
+      - name: Redeploy the web app (same URL)
+        if: steps.check.outputs.ready == 'true'
+        working-directory: apps-script
+        run: clasp deploy --deploymentId "$GAS_DEPLOYMENT_ID" --description "CI ${GITHUB_SHA::7}"
+        env:
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}

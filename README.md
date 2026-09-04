@@ -87,7 +87,34 @@ missing tabs on first run.
 3. Run `testSlack()` once in the editor to grant the external-request scope.
 4. **Deploy ▸ New deployment ▸ Web app** ▸ *Execute as: Me* ▸ *Access: Anyone*.
 5. Copy the `/exec` URL — that's the gateway URL the dashboard uses.
-   > Every code change needs **Deploy ▸ Manage deployments ▸ ✏️ ▸ New version**.
+   > Every code change needs **Deploy ▸ Manage deployments ▸ ✏️ ▸ New version** —
+   > unless you set up auto-deploy below.
+
+#### Auto-deploy the gateway on merge (optional, via clasp + GitHub Actions)
+The dashboard auto-deploys through Netlify, but the gateway lives in Apps Script,
+which isn't connected to this repo. `.github/workflows/deploy-gateway.yml` closes
+that gap: on every merge to `main` that touches `apps-script/**` it runs
+[`clasp`](https://github.com/google/clasp) to push the code and **redeploy the
+existing web-app deployment in place** (same `/exec` URL). One-time setup:
+
+1. **Locally:** `npm i -g @google/clasp@2.4.2` then `clasp login`. This writes
+   `~/.clasprc.json` (an OAuth token — keep it secret).
+2. **Enable the Apps Script API** for that Google account at
+   <https://script.google.com/home/usersettings>.
+3. **Match the manifest.** In the editor, Project Settings ▸ *Show "appsscript.json"*,
+   and make `apps-script/appsscript.json` match it — **especially `timeZone`**
+   (all the month/date logic uses the script's timezone) and the `webapp` block
+   (`executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS` = *Me* / *Anyone*).
+4. **Add three repo secrets** (Settings ▸ Secrets and variables ▸ Actions):
+   - `CLASPRC_JSON` — the full contents of `~/.clasprc.json`.
+   - `GAS_SCRIPT_ID` — Apps Script ▸ Project Settings ▸ IDs ▸ **Script ID**.
+   - `GAS_DEPLOYMENT_ID` — Deploy ▸ Manage deployments ▸ the active web app's
+     **Deployment ID** (so it updates that URL instead of making a new one).
+
+Until all three secrets exist the workflow succeeds but no-ops. After that,
+merging a gateway change deploys it automatically; bump `GATEWAY_VERSION` so you
+can confirm the new version in **Settings**. To deploy by hand, run the workflow
+from the Actions tab, or `cd apps-script && clasp push -f && clasp deploy -i <deploymentId>`.
 
 ### 3. The Ads scripts (`ads-scripts/*.js`)
 Add each script under the relevant **MCC ▸ Tools ▸ Bulk actions ▸ Scripts**,
