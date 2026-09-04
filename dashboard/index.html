@@ -744,7 +744,52 @@ window.addEventListener('resize', ()=>{ if(EXEC && document.getElementById('exec
 let INS = null;
 // earliest / latest date across ALL daily feeds (so the default range shows every channel)
 function insSpan(){ let mn=null,mx=null; insDaily().forEach(r=>{ if(r.date){ if(!mn||r.date<mn)mn=r.date; if(!mx||r.date>mx)mx=r.date; } }); return {mn,mx}; }
-function insDefault(){ const y=now.getFullYear(), m=now.getMonth(); return { from:isoLocal(new Date(y,m-1,1)), to:isoLocal(new Date(y,m,0)), brands:[], _brandOpen:false, franchise:'', platform:'', compare:false, present:false }; }
+function insDefault(){ const y=now.getFullYear(), m=now.getMonth(); return { from:isoLocal(new Date(y,m-1,1)), to:isoLocal(new Date(y,m,0)), brands:[], _brandOpen:false, franchise:'', platform:'', compare:false, present:false, mode:'rollups' }; }
+let INS_NEW = { days:30, data:null, loading:false };
+function insSetMode(m){ INS.mode=m; if(m==='new' && INS_NEW.data===null) loadNewCampaigns(); else renderInsights(); }
+function insSetNewDays(d){ INS_NEW.days=Number(d)||30; loadNewCampaigns(); }
+async function loadNewCampaigns(){
+  INS_NEW.loading=true; renderInsights();
+  const res=await call({action:'newCampaigns', days:INS_NEW.days});
+  INS_NEW.loading=false; INS_NEW.data=(res&&res.ok)?res.campaigns:[];
+  if(INSIGHTS && INS.mode==='new') renderInsights();
+}
+// returns filtered + derived new-campaign rows (honors brand/franchise/platform filters)
+function insNewRows(){
+  return (INS_NEW.data||[]).map(c=>({ ...c, brand:brandOf(c.franchise), market:marketOf(c.franchise),
+      cpc:c.clicks>0?c.cost/c.clicks:null, ctr:c.impr>0?c.clicks/c.impr:null, cpl:c.leads>0?c.cost/c.leads:null }))
+    .filter(c=> (!INS.brands.length||INS.brands.includes(c.brand)) && (!INS.franchise||c.franchise===INS.franchise) && (!INS.platform||c.platform===INS.platform))
+    .sort((a,b)=> (a.launched<b.launched?1:a.launched>b.launched?-1:0) || b.cost-a.cost);
+}
+function insNewSection(){
+  if(INS_NEW.loading && INS_NEW.data===null) return `<div class="ins-card"><div class="muted">Loading new campaigns…</div></div>`;
+  const rows=insNewRows();
+  const body=rows.map(c=>`<tr>
+    <td class="l">${esc(c.platform)}</td><td class="l">${esc(c.franchise)}</td><td class="l">${esc(c.campaign)}</td>
+    <td class="l">${esc(dayLabel(c.launched))}</td><td>${c.daysLive}</td>
+    <td>${insMoney(c.cost)}</td><td>${insInt(c.impr)}</td><td>${insInt(c.clicks)}</td><td>${insM2(c.cpc)}</td><td>${insPct(c.ctr)}</td><td>${insInt(c.leads)}</td><td>${insM2(c.cpl)}</td></tr>`).join('');
+  const cap = INS.present ? `<div class="ins-cap">${esc(insScopeLabel())} · launched in the last ${INS_NEW.days} days</div>` : '';
+  return `<div class="ins-card"><div class="ins-h">New campaigns · first ${INS_NEW.days} days<button class="ghost ins-copy" onclick="copyCardImage(this)">Copy image</button></div>${cap}
+    <div class="ins-scroll"><table class="instbl"><thead><tr><th class="l">Platform</th><th class="l">Franchise</th><th class="l">Campaign</th><th class="l">Launched</th><th>Days</th><th>Cost</th><th>Impr</th><th>Clicks</th><th>CPC</th><th>CTR</th><th>Leads</th><th>CPL</th></tr></thead>
+    <tbody>${body||`<tr><td colspan="12" class="muted">No campaigns launched in the last ${INS_NEW.days} days.</td></tr>`}</tbody></table></div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Metrics are cumulative since each campaign launched. LSA has no campaign-level data, so it isn't shown here.</div></div>`;
+}
+async function insEmailNew(btn){
+  const rows=insNewRows();
+  if(!rows.length){ alert('No new campaigns to send for the current filters.'); return; }
+  const columns=['Platform','Franchise','Campaign','Launched','Days','Cost','Impr','Clicks','CPC','CTR','Leads','CPL'];
+  const body=rows.map(c=>[c.platform,c.franchise,c.campaign, dayLabel(c.launched), String(c.daysLive),
+    insMoney(c.cost), insInt(c.impr), insInt(c.clicks), insM2(c.cpc), insPct(c.ctr), insInt(c.leads), insM2(c.cpl)]);
+  const scope=insScopeLabel();
+  const payload=JSON.stringify({ title:`New campaigns update — ${scope}`,
+    subtitle:`Launched in the last ${INS_NEW.days} days · ${rows.length} campaign${rows.length===1?'':'s'} · as of ${dayLabel(isoLocal(ASOF))}`,
+    columns, rows:body, leftCols:4, note:'Metrics are cumulative since each campaign launched.' });
+  if(!confirm(`Email this new-campaigns update (${rows.length} campaign${rows.length===1?'':'s'}) to the configured recipients?`)) return;
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  const res=await call({action:'emailReport', kind:'newCampaigns', payload, subject:`New campaigns update — ${scope}`});
+  if(res && res.ok){ if(btn){ btn.textContent='Sent ✓'; btn.classList.add('done'); setTimeout(()=>{btn.textContent='Email update';btn.disabled=false;btn.classList.remove('done');},2000);} }
+  else { alert('Email failed: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='Email update'; } }
+}
 // human date-range label — a whole calendar month reads "July 2026", else "Jul 1 – Jul 27, 2026"
 function insRangeLabel(){
   const f=INS.from, t=INS.to; if(!f||!t) return '';
@@ -876,13 +921,35 @@ function renderInsights(){
 
   const franOpts=['<option value="">All franchises</option>'].concat(franchises.map(f=>`<option value="${esc(f)}"${f===INS.franchise?' selected':''}>${esc(f)}</option>`)).join('');
   const platOpts=[['','All platforms'],['Google','Google'],['LSA','LSA'],['Meta','Meta']].map(p=>`<option value="${p[0]}"${p[0]===INS.platform?' selected':''}>${p[1]}</option>`).join('');
+  const modeSeg=`<div><label>View</label><div class="seg">
+      <button class="${INS.mode!=='new'?'on':''}" onclick="insSetMode('rollups')">Rollups</button>
+      <button class="${INS.mode==='new'?'on':''}" onclick="insSetMode('new')">New campaigns</button></div></div>`;
+  const filterCtrls=`<div><label>Brand</label>${insBrandDD(brands)}</div>
+    <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
+    <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>`;
+  const scopeNote = (INS.brands.length||INS.franchise||INS.platform)
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brands.length&&('brand '+insBrandSummary()), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}.</div>`
+    : '';
+
+  // ── New-campaigns mode: campaign-level table with a "new within" window + email ──
+  if(INS.mode==='new'){
+    const dayOpts=[7,14,30,60,90].map(d=>`<option value="${d}"${d===INS_NEW.days?' selected':''}>${d} days</option>`).join('');
+    const newControls=`<div class="ins-controls">
+      ${modeSeg}
+      ${filterCtrls}
+      <div><label>New within</label><select onchange="insSetNewDays(this.value)">${dayOpts}</select></div>
+      <div><label>Send</label><button class="primary" onclick="insEmailNew(this)" title="Email this new-campaigns update to the configured recipients">Email update</button></div>
+    </div>`;
+    view.className='';
+    view.innerHTML = newControls + scopeNote + insNewSection();
+    return;
+  }
 
   const controls=`<div class="ins-controls">
+    ${modeSeg}
     <div><label>From</label><input type="date" value="${INS.from}" onchange="setIns('from',this.value)"></div>
     <div><label>To</label><input type="date" value="${INS.to}" onchange="setIns('to',this.value)"></div>
-    <div><label>Brand</label>${insBrandDD(brands)}</div>
-    <div><label>Franchise</label><select onchange="setIns('franchise',this.value)">${franOpts}</select></div>
-    <div><label>Platform</label><select onchange="setIns('platform',this.value)">${platOpts}</select></div>
+    ${filterCtrls}
     <div><label>Compare</label><label class="ins-check"><input type="checkbox" ${INS.compare?'checked':''} onchange="setIns('compare',this.checked)"> vs previous period</label></div>
     <div><label>Quick range</label><div class="seg ins-presets">
       <button onclick="insPreset('all')">All data</button>
@@ -892,10 +959,6 @@ function renderInsights(){
     </div></div>
     <div><label>Deck</label><button class="primary" onclick="setIns('present',true)" title="Clean, screenshot-friendly layout for the monthly deck">Present mode</button></div>
   </div>`;
-
-  const scopeNote = (INS.brands.length||INS.franchise||INS.platform)
-    ? `<div class="muted" style="font-size:12px;margin:2px 0 8px">Filtered to ${[INS.brands.length&&('brand '+insBrandSummary()), INS.franchise&&('franchise '+INS.franchise), INS.platform&&('platform '+INS.platform)].filter(Boolean).map(esc).join(' · ')}. All tables below reflect this.</div>`
-    : '';
 
   const period=insRangeLabel(), scope=insScopeLabel();
   const caption = INS.present ? `${scope} · ${period}` : '';

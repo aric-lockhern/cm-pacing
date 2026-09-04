@@ -33,7 +33,7 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 
 | Path | What it is |
 |------|-----------|
-| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Overview** tab (all-channel billed/fees/pacing rolled up to Account/brand, month + YTD, spend chart), the **Insights** tab (performance analytics — cost/impr/clicks/CPC/CTR/leads/CPL rolled up by franchise/platform/market, date range, MoM compare, YTD leads/CPL chart, CSV export), and **Budget moves**, a channel-reallocation ledger. |
+| `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Overview** tab (all-channel billed/fees/pacing rolled up to Account/brand, month + YTD, spend chart), the **Insights** tab (performance analytics — cost/impr/clicks/CPC/CTR/leads/CPL rolled up by platform/brand/market, date range, MoM compare, YTD leads/CPL chart, CSV export, per-card "Copy image", a **New campaigns** monitor with an **Email update**; costs are client-facing with the fee baked in), and **Budget moves**, a channel-reallocation ledger. |
 | `apps-script/sheet_gateway.gs` | Apps Script **web app** — the JSONP gateway, Slack poster, and budget sync. |
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |

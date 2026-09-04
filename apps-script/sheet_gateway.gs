@@ -11,7 +11,7 @@
  * Run testSlack() once in the editor to grant the external-request scope.
  *
  * ── CONFIG ──────────────────────────────────────────────────────────────── */
-var GATEWAY_VERSION   = '2026-08-10';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
+var GATEWAY_VERSION   = '2026-08-11';   // bump on each deploy; the app shows this in Settings so you can confirm a redeploy took
 var SPREADSHEET_ID    = '16RYai7RW9By034nDapw7DKzVSRUdJIYk1B1ISNHYSLE';
 var SHARED_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';   // must match app + ads scripts
 var SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/PUT/WEBHOOK/HERE';
@@ -94,6 +94,8 @@ function doGet(e) {
       case 'ackBudget':  out = ackBudget_(p); break;
       case 'postSlack':  out = postSlack_(p.text); break;
       case 'sendEmail':  out = sendEmail_(p); break;
+      case 'emailReport':out = emailReport_(p); break;
+      case 'newCampaigns': out = newCampaigns_(p); break;
       case 'slackUsers': out = slackUsers_(); break;
       default:           out = { ok: false, error: 'unknown action' };
     }
@@ -1019,6 +1021,86 @@ function sendEmail_(p) {
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+/* ── generic table-report email (New campaigns update, etc.) ──────────────────
+ * The client sends a compact {title, subtitle, columns, rows, note}; we render a
+ * plain HTML table and email it to the configured recipients. Recipients default
+ * to Config.emailTo (same list the flag emails use). */
+function emailReport_(p) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var to = p.to || readConfig_(ss).emailTo;
+  if (!to) return { ok: false, error: 'no recipients configured' };
+  var d = {};
+  try { d = JSON.parse(p.payload || '{}'); } catch (e) { return { ok: false, error: 'bad payload: ' + e }; }
+  var cols = d.columns || [], rows = d.rows || [];
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  var leftCols = Number(d.leftCols == null ? 3 : d.leftCols);
+  var thead = '<tr>' + cols.map(function (c, i) {
+    return '<th style="text-align:' + (i < leftCols ? 'left' : 'right') + ';padding:7px 10px;border-bottom:2px solid ' + MAIL_LINE +
+      ';font:600 11px Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase;color:' + MAIL_MUTED + '">' + esc(c) + '</th>'; }).join('') + '</tr>';
+  var tbody = rows.map(function (r) {
+    return '<tr>' + r.map(function (cell, i) {
+      return '<td style="text-align:' + (i < leftCols ? 'left' : 'right') + ';padding:7px 10px;border-bottom:1px solid ' + MAIL_LINE +
+        ';font:13px Arial,sans-serif;color:' + MAIL_INK + '">' + esc(cell) + '</td>'; }).join('') + '</tr>'; }).join('');
+  var html = '<div style="font:14px Arial,sans-serif;color:' + MAIL_INK + '">'
+    + '<h2 style="margin:0 0 2px;color:' + MAIL_INK + '">' + esc(d.title || 'Update') + '</h2>'
+    + (d.subtitle ? '<div style="color:' + MAIL_MUTED + ';font-size:13px;margin-bottom:12px">' + esc(d.subtitle) + '</div>' : '')
+    + (rows.length ? '<table style="border-collapse:collapse;font-variant-numeric:tabular-nums"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>'
+                   : '<div style="color:' + MAIL_MUTED + '">Nothing to report.</div>')
+    + (d.note ? '<div style="color:' + MAIL_MUTED + ';font-size:12px;margin-top:10px">' + esc(d.note) + '</div>' : '')
+    + '</div>';
+  var text = (d.title || 'Update') + '\n' + (d.subtitle || '') + '\n\n' + [cols].concat(rows).map(function (r) { return r.join('\t'); }).join('\n');
+  try { MailApp.sendEmail({ to: to, subject: p.subject || d.title || 'Content Massive update', htmlBody: html, body: text }); return { ok: true, to: to }; }
+  catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/* ── new-campaign detection ───────────────────────────────────────────────────
+ * A campaign is "new" if its first day WITH activity is (a) after data collection
+ * began for its platform (so a campaign already running when the feed started
+ * isn't flagged) and (b) within `days` of today. Cost is grossed up by the
+ * platform fee (client-facing). Reads the campaign-level daily tabs. */
+function newCampaigns_(p) {
+  var days = Math.max(1, Number(p && p.days) || 30);
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var cfg = readConfig_(ss);
+  var out = [];
+  collectNew_(readTab_(ss, TABS.dailyGCamp), 'Google', { cost: 'Spend', impr: 'Impr', clicks: 'Clicks', leads: 'Conv' }, days, Number(cfg.googleFee) || 0, out);
+  collectNew_(readTab_(ss, TABS.metaDaily), 'Meta', { cost: 'Spend', impr: 'Impressions', clicks: 'Clicks', leads: 'Leads/Conv' }, days, Number(cfg.metaFee) || 0, out);
+  out.sort(function (a, b) { return a.launched < b.launched ? 1 : a.launched > b.launched ? -1 : (b.cost - a.cost); });
+  return { ok: true, days: days, asof: currentDate_(), campaigns: out };
+}
+function collectNew_(rows, platform, col, days, fee, out) {
+  var min = null, camps = {};
+  rows.forEach(function (r) {
+    var d = normalize_(r.Date); if (!d) return; d = String(d).slice(0, 10);
+    if (min === null || d < min) min = d;
+    var label = String(r.Label || '').trim(), camp = String(r.Campaign || '').trim();
+    if (!label || !camp) return;
+    var cost = Number(r[col.cost]) || 0, impr = col.impr ? (Number(r[col.impr]) || 0) : 0,
+        clk = col.clicks ? (Number(r[col.clicks]) || 0) : 0, lead = Number(r[col.leads]) || 0;
+    var k = label + '||' + camp;
+    var c = camps[k] = camps[k] || { label: label, campaign: camp, first: null, last: null, cost: 0, impr: 0, clicks: 0, leads: 0 };
+    if (cost > 0 || impr > 0 || clk > 0 || lead > 0) {
+      if (c.first === null || d < c.first) c.first = d;
+      if (c.last === null || d > c.last) c.last = d;
+    }
+    c.cost += cost; c.impr += impr; c.clicks += clk; c.leads += lead;
+  });
+  var g = fee < 1 ? 1 / (1 - fee) : 1, today = currentDate_();
+  Object.keys(camps).forEach(function (k) {
+    var c = camps[k];
+    if (c.first === null) return;         // never had activity
+    if (min !== null && c.first <= min) return;   // present since data began → not new
+    var live = daysBetween_(c.first, today);
+    if (live > days) return;
+    out.push({ platform: platform, franchise: c.label, campaign: c.campaign, launched: c.first, daysLive: live,
+      cost: round2_(c.cost * g), impr: Math.round(c.impr), clicks: Math.round(c.clicks), leads: Math.round(c.leads) });
+  });
+}
+function daysBetween_(a, b) {   // whole days from date a to date b (yyyy-MM-dd)
+  var da = new Date(a + 'T00:00:00'), db = new Date(b + 'T00:00:00');
+  return Math.max(0, Math.round((db - da) / 86400000));
 }
 
 var MAIL_INK = '#2b2a35', MAIL_MUTED = '#6c6b78', MAIL_LINE = '#e4e4ea', MAIL_ACCENT = '#f26722';
