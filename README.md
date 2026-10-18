@@ -35,6 +35,8 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 |------|-----------|
 | `dashboard/index.html` | The single-file pacing dashboard (UI + all client JS/CSS). Includes the **Overview** tab (all-channel billed/fees/pacing rolled up to Account/brand, month + YTD, spend chart), the **Insights** tab (performance analytics — cost/impr/clicks/CPC/CTR/leads/CPL rolled up by platform/brand/market, date range, MoM compare, YTD leads/CPL chart, CSV export, per-card "Copy image", a **New campaigns** monitor with an **Email update**; costs are client-facing with the fee baked in), and **Budget moves**, a channel-reallocation ledger. |
 | `apps-script/sheet_gateway.gs` | Apps Script **web app** — the JSONP gateway, Slack poster, and budget sync. |
+| `apps-script/Publish.gs` | Apps Script publisher for the **fast read path** — posts the gateway's read payloads to Netlify Blobs every 5 min so the page doesn't wait on Google's slow web-app front end. |
+| `netlify/functions/api.mjs`, `netlify/lib/fastapi.mjs` | Netlify Function serving the fast read path at `/api` (+ `/api/ingest`). Logic in `lib/` so `tests/fastapi.test.mjs` can drive it. |
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |
 | `ads-scripts/budget_apply.js` | Google Ads MCC script (hourly) that **applies** queued changes from the app UI — pacing **budget changes** (any campaign type, via budget id) and **campaign pause/activate** (Pause/Activate buttons) — within safety limits, then emails a summary. Starts in `DRY_RUN`. |
@@ -72,6 +74,52 @@ budgets:
 - Depletion is computed in the app from spend + budgets (the gateway just stores
   the ledger). If a new split is permanent, set it directly in next month's
   budget column instead of logging a move.
+
+## Fast read path (Netlify Functions + Blobs)
+
+Google's Apps Script web-app front end is slow and flaky — the script runs in
+milliseconds, but requests take 3–50 s and sometimes come back 404 from
+`script.googleusercontent.com`. So **reads** are served from the dashboard's own
+address instead, while the **Sheet + Apps Script stay the source of truth and the
+only writer** (this path never writes to the Sheet):
+
+- **Publisher (`apps-script/Publish.gs`).** A 5-minute time trigger POSTs the
+  gateway's finished read payloads — `data` (`getDataString_`) and `campaignBulk`
+  (`campaignBulkString_`), gzipped + base64 — plus a tiny **index** (a SHA-256 of
+  `SHARED_SECRET`, never the secret; the gateway version; a timestamp) to
+  `<site>/api/ingest` with `Authorization: Bearer <INGEST_SECRET>`. Payloads are
+  only re-sent when their content changed (a hash is kept in Script Properties). A
+  settings save and hand edits to the Sheet republish right away.
+- **Read API (`netlify/functions/api.mjs` → `netlify/lib/fastapi.mjs`).**
+  `GET /api?action=data|campaignBulk&secret=…` returns the published payload **iff
+  `sha256(secret)` matches the published `secretHash`** — the same check as the
+  gateway's `p.secret !== SHARED_SECRET`, so the fast path grants exactly what the
+  gateway would and the secret never lives in the function. `/api/ingest` refuses
+  everything unless `INGEST_SECRET` is set (≥24 chars) and the bearer token
+  matches. Anything it can't positively verify (no secret match, nothing published,
+  a payload not published yet, a forced `fresh=1` Refresh, an unknown/write action)
+  answers `{ok:false, fallback:true}` and the page asks Apps Script, the authority.
+  `GET /api?action=ping` reports whether anything is published.
+- **Page.** `call()` tries `location.origin + '/api'` first for `data`/`campaignBulk`
+  reads; a `fallback` answer, an HTML/404 answer, or a network error falls through
+  to the existing Apps Script JSONP (which keeps its cold-start retries), and a
+  missing function turns the fast path off for the visit. **Writes always go to
+  Apps Script.** Settings ▸ gateway health shows whether fast loading is on and, if
+  not, why.
+- **Tests (`tests/fastapi.test.mjs`).** Run the real publisher through the real
+  function over an in-memory store and assert the fast path returns the gateway's
+  payloads to a matching secret, falls back for anything it can't verify, revokes a
+  rotated secret, and that ingest refuses a wrong/missing/short secret. `npm test`.
+- **Known harmless differences.** The fast copy is up to ~5 minutes behind the
+  Sheet (the person who made a change sees fresh data immediately — their Refresh
+  and post-write reload use `fresh=1`, which is authoritative). Nothing about *what*
+  data is shown or *who* can see it changes — only where reads are served from.
+
+**One-time setup:** ① in the Sheet, run **Fast loading ▸ Set up** (creates
+`INGEST_SECRET`, installs the triggers, test-sends). ② copy the shown
+`INGEST_SECRET` into **Netlify → Site configuration → Environment variables**. ③
+**Trigger a Netlify deploy.** ④ run the menu item again. (Also set
+`PUBLISH_SITE_URL` at the top of `Publish.gs` to your Netlify URL first.)
 
 ## Setup
 
