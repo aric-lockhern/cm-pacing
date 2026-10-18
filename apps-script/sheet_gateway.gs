@@ -80,7 +80,7 @@ function doGet(e) {
       case 'campaignDaily': out = campaignDaily_(p.label); break;
       case 'setBudget':  out = setBudget_(p); break;
       case 'setConfig':  out = setConfig_(p.key, p.value); break;
-      case 'setConfigBatch': out = setConfigBatch_(p.pairs); break;
+      case 'setConfigBatch': out = setConfigBatch_(p.pairs); pubSoonSafe_(); break;
       case 'syncBudgets':  out = syncBudgets_(p); break;
       case 'budgetTabs':   out = budgetTabs_(p.url); break;
       case 'budgetColumns':out = budgetColumns_(p.url, p.tab); break;
@@ -1255,6 +1255,9 @@ function headIndex_(headerRow) {
 }
 
 /* ── responders ──────────────────────────────────────────────────────────── */
+
+// Best-effort fast-path refresh after a settings save. Safe whether or not Publish.gs is in the project.
+function pubSoonSafe_() { try { if (typeof publishSoon_ === 'function') publishSoon_(); } catch (e) {} }
 
 function jsonp_(cb, obj) {
   return ContentService

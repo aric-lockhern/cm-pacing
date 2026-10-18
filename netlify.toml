@@ -1,4 +1,15 @@
-# The site is the single-file dashboard. There's no build step — just publish
-# the dashboard/ folder so its index.html is served at the site root.
+# The site is the single-file dashboard (dashboard/index.html, served at the site root). There's no
+# bundler, but `npm test` runs the fast-read-path unit + security tests first, so a commit that breaks
+# them never reaches the live page. The /api Netlify Function serves the fast READ path (see
+# apps-script/Publish.gs); every WRITE still goes to the Apps Script gateway.
 [build]
+  command = "npm test"
   publish = "dashboard"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  # netlify/functions/api.mjs → /api and /api/ingest
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

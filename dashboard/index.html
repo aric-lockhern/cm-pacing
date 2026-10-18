@@ -1174,9 +1174,35 @@ const DAYS_ELAPSED  = Math.max(0, DAY_OF_MONTH - 1);          // complete days s
 const ELAPSED_FRAC  = DAYS_ELAPSED / DAYS_IN_MONTH;
 const DAYS_LEFT     = Math.max(0, DAYS_IN_MONTH - DAYS_ELAPSED);   // today + rest of month
 
-/* ── JSONP ─────────────────────────────────────────────────────────── */
-let jsonpN = 0;
+/* ── reads: fast path (Netlify) + JSONP fallback (Apps Script) ─────────
+   Reads are served from the dashboard's OWN /api (Netlify Function + Blobs, which the Apps Script
+   publisher refreshes every few minutes) because Google's web-app front end is slow and flaky (3–50 s,
+   random 404s). Anything the fast path can't positively verify — no secret match, nothing published,
+   payload not published, the Refresh button (fresh:'1') — falls through to Apps Script, which stays the
+   source of truth and the only writer. A missing function (HTML/404) turns the fast path off for the
+   visit. WRITES always go straight to Apps Script via JSONP. ── */
+const FAST = /^https?:$/.test(location.protocol) ? location.origin + '/api' : '';
+let FAST_OFF = false, FAST_WHY = '', FAST_USED = false;
+const FAST_READS = { data:1, campaignBulk:1 };
 function call(params){
+  if(FAST && !FAST_OFF && FAST_READS[params.action] && params.fresh!=='1') return callFast(params);
+  return callJsonp(params);
+}
+function callFast(params){
+  const q = new URLSearchParams(Object.assign({secret:LS.secret()}, params));
+  return fetch(FAST + '?' + q.toString(), {cache:'no-store'})
+    .then(r=> r.ok ? r.json() : null)
+    .then(j=>{
+      if(j && j.ok===true && !j.fallback){ FAST_USED = true; FAST_WHY = ''; return j; }   // gateway payload, served fast
+      if(j && j.fallback){ FAST_WHY = String(j.error||''); return callJsonp(params); }     // ask Apps Script
+      if(j && j.ok===false) throw new Error(j.error || 'refused');                         // a real refusal
+      FAST_OFF = true; FAST_WHY = 'no function';                                           // null = HTML/404 here
+      return callJsonp(params);
+    })
+    .catch(()=>{ FAST_OFF = true; FAST_WHY = 'no function'; return callJsonp(params); });
+}
+let jsonpN = 0;
+function callJsonp(params){
   return new Promise((resolve,reject)=>{
     const cb = '__pace_cb_'+(jsonpN++);
     const t = setTimeout(()=>{cleanup();reject(new Error('timeout'));}, 45000);
@@ -2275,9 +2301,24 @@ function openSettings(){
     const gv = DATA && DATA.gatewayVersion ? DATA.gatewayVersion : 'unknown (old gateway)';
     const gc = DATA && Array.isArray(DATA.googleCampaigns) && DATA.googleCampaigns.length;
     const mf = DATA && Array.isArray(DATA.metaFeed) && DATA.metaFeed.length;
+    const fastState = !FAST ? 'off (opened as a local file)'
+      : FAST_OFF ? 'off this visit — function not answering (check the latest Netlify deploy)'
+      : FAST_USED ? 'ON — reads served from Netlify (fast)'
+      : FAST_WHY==='nothing published yet' ? 'not published yet — run the Sheet menu ▸ Fast loading ▸ Set up'
+      : FAST_WHY==='not known here' ? 'published, but this secret isn’t recognized yet (re-publish from the Sheet)'
+      : FAST_WHY ? ('falling back — '+esc(FAST_WHY)) : 'ready';
     document.getElementById('gwInfo').innerHTML =
       `Gateway version: <b>${esc(String(gv))}</b> · Google_Campaigns rows: <b>${gc||0}</b> · Meta_Feed rows: <b>${mf||0}</b>. `
-      + `If the version isn't the latest after you deploy, the deployment didn't take — use Deploy ▸ Manage deployments ▸ ✏️ ▸ New version (not Save).`;
+      + `If the version isn't the latest after you deploy, the deployment didn't take — use Deploy ▸ Manage deployments ▸ ✏️ ▸ New version (not Save).`
+      + `<br><span id="fastInfo">Fast loading: <b>${fastState}</b></span>`;
+    // confirm what the Netlify function reports, if present
+    if(FAST) fetch(FAST+'?action=ping',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{
+      const el=document.getElementById('fastInfo'); if(!el) return;
+      if(j && j.ok && j.result){ const r=j.result; el.innerHTML = `Fast loading: <b>${r.published?'published':'not published yet'}</b>`
+        + (r.published && r.at ? ` · last publish ${new Date(r.at).toLocaleString()}` : '')
+        + (r.gatewayVersion ? ` · payload from gateway ${esc(String(r.gatewayVersion))}` : '')
+        + ` · this visit: ${FAST_USED?'<b>served fast</b>':'on the slow path'}`; }
+    }).catch(()=>{});
   })();
   document.getElementById('setScrim').classList.add('on');
 }
