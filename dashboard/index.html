@@ -1249,6 +1249,9 @@ function gfx(r){
   return fee<1 ? 1/(1-fee) : 1;
 }
 function setMarkup(on){ MARKUP=!!on; localStorage.setItem('pace_markup', on?'1':'0'); render(); if(DD.k) renderDD(); }
+// One-time reset: clear any sort remembered from before the A→Z default so every
+// browser starts on franchise A→Z. After this, a manual sort still persists as usual.
+try{ if(!localStorage.getItem('pace_sort_reset_az')){ localStorage.removeItem('pace_sort'); localStorage.setItem('pace_sort_reset_az','1'); } }catch(e){}
 let sortKey = LS.sort();
 let sortDir = (sortKey==='name'||sortKey==='type'||sortKey==='live') ? 1 : -1;   // name/type/live ascending
 let view = LS.view();
