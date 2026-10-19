@@ -1730,6 +1730,9 @@ function optRecs(){ return CHANNEL==='google' ? MODEL.filter(r=>r.live&&!r.hidde
 let OPPS = false;
 function showOpportunities(){
   OPPS = true; EXEC = false; INSIGHTS = false; localStorage.setItem('pace_exec','0'); closeDD();
+  // Budget-shift recs are Google-only, so compute from Google data even if the user
+  // opened this from the LSA/Meta tab. In-memory only — their saved tab is untouched.
+  if(DATA && CHANNEL!=='google'){ CHANNEL='google'; build(); }
   showMain(false);
   document.getElementById('execView').style.display = 'none';
   document.getElementById('insightsView').style.display = 'none';
