@@ -211,6 +211,7 @@
   .cl-daily{background:rgba(255,255,255,.07);color:var(--muted)}
   .cl-move{background:rgba(242,103,34,.16);color:#f5a06a}
   .cl-campaign{background:rgba(230,171,63,.16);color:#e6ab3f}
+  .cl-google{background:rgba(90,160,255,.16);color:#8fc0ff}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
 
   /* overview / exec view */
@@ -2633,6 +2634,12 @@ function changeLogEntries(){
       who:String(r.RequestedBy||''),
       detail:`${String(r.Action||'').toLowerCase()} ${String(r.Campaign||'')}${r.Note?(' · '+r.Note):''}`.trim(),
       status:String(r.Status||'') }); });
+  // real Google Ads change history (change_event feed) — changes made directly in Google Ads
+  (DATA.googleChanges||[]).forEach(r=>{
+    out.push({ ts:String(r.Date||''), franchise:String(r.Label||'').trim(), slug:'google', kind:'Google Ads',
+      who:String(r.User||''),
+      detail:`${String(r.Type||'')}: ${String(r.Change||'')}${r.Campaign?(' · '+r.Campaign):''}`.trim(),
+      status:String(r.Source||'') }); });
   return out.sort((a,b)=> String(b.ts).localeCompare(String(a.ts)));
 }
 function renderChangeLogTable(el, entries, showFranchise, limit){

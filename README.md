@@ -40,6 +40,7 @@ Three loosely-coupled parts, glued together by a single Google Sheet:
 | `ads-scripts/google_pacing_feed.js` | Google Ads MCC script — writes Google spend/conv/budgets + per-campaign daily. Drops ENDED campaigns. |
 | `ads-scripts/lsa_pacing_feed.js` | Google Ads MCC script for the **LSA** accounts (spend + conversions only, 365-day running total). |
 | `ads-scripts/budget_apply.js` | Google Ads MCC script (hourly) that **applies** queued changes from the app UI — pacing **budget changes** (any campaign type, via budget id) and **campaign pause/activate** (Pause/Activate buttons) — within safety limits, then emails a summary. Starts in `DRY_RUN`. |
+| `ads-scripts/google_change_history.js` | Google Ads MCC script that pulls Google's **native change history** (`change_event`) for budget/status/bidding changes — changes made directly in Google Ads, by anyone — rolled up per franchise with who made them. Writes `Google_Changes` (rolling 30 days); the dashboard folds it into the change log. |
 
 > Meta has no Google Ads-style script (Meta can't run one). Instead the gateway
 > **pulls Meta daily spend + metrics from a DataSlayer Google Sheet** into
