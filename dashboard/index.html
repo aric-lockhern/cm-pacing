@@ -248,6 +248,7 @@
   .optcard{background:rgba(95,107,255,.1);border:1px solid rgba(95,107,255,.4);border-radius:8px;padding:9px 12px;margin:10px 0;font-size:13px;line-height:1.45}
   .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
   .hcount:empty{display:none}
+  .qdot{display:inline-block;margin-left:6px;font:700 8.5px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);border:1px solid rgba(242,103,34,.5);border-radius:999px;padding:0 6px;vertical-align:middle;cursor:help}
 
   /* wide tables scroll inside their own box so the page never scrolls sideways */
   .tablewrap,.exec-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -1450,6 +1451,9 @@ function build(){
   (DATA.groups||[]).forEach(r=>labels.add(key(r.Label)));
 
   MODEL = [];
+  // Pending (queued, not-yet-applied) daily-budget requests — reflected immediately so the
+  // team sees their change before Google Ads / the feed catches up. Google channel only.
+  const QSTAT = (CHANNEL==='google') ? queueStatus() : {};
   labels.forEach(k=>{
     if(IGNORE_FRANCHISES.has(k)) return;   // drop billing-sheet header artifacts
     const meta = G[k] && G[k][0] || {};
@@ -1461,6 +1465,11 @@ function build(){
     const feeAmt = gross - adTarget;
     const hasFeed = feed.hasOwnProperty(k);
     const f = feed[k] || {status:'', dailyBudget:0};
+    // A queued budget change overrides the displayed daily budget until the feed re-runs.
+    const pq = QSTAT[k];
+    const pendDaily = (pq && pq.status==='pending' && pq.amt>0) ? pq.amt : null;
+    const appliedDaily = f.dailyBudget||0;
+    const effDaily = pendDaily!=null ? pendDaily : appliedDaily;
     const type = (meta.Type||'').toLowerCase()==='e-comm' ? 'e-comm' : 'lead-gen';
     const hidden = String(meta.Hidden||'').toLowerCase()==='true' || meta.Hidden===true;
     // In the feed → status-driven. Not in the feed → paused only when strictStatus is on
@@ -1488,7 +1497,7 @@ function build(){
       runRate = ELAPSED_FRAC>0 ? spend/ELAPSED_FRAC : 0;
       dailyTarget = adTarget / DAYS_IN_MONTH;
       reqDaily = DAYS_LEFT>0 ? Math.max(0, adTarget - spend)/DAYS_LEFT : 0;
-      projected = (f.dailyBudget>0) ? spend + f.dailyBudget*DAYS_LEFT : runRate;
+      projected = (effDaily>0) ? spend + effDaily*DAYS_LEFT : runRate;
       pace = expectedToDate>0 ? spend/expectedToDate : (spend>0?Infinity:0);
     }
 
@@ -1502,7 +1511,7 @@ function build(){
 
     MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
       projected, onTarget, pace, delta,
-      conv, cpa, rev, roas, type, hidden, live, dailyBudget:f.dailyBudget||0, reqDaily,
+      conv, cpa, rev, roas, type, hidden, live, dailyBudget:effDaily, dailyApplied:appliedDaily, dailyPending:pendDaily, reqDaily,
       hasBudget:gross>0, dailyTarget, series, alert, corrected, moved,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
   });
@@ -2098,7 +2107,7 @@ function renderRows(){
       <td>${money(r.spend*F)}</td>
       <td class="muted">${r.hasBudget?money(r.projected*F):'—'}</td>
       <td class="budcell" onclick="editBudget('${r.k}')">${r.hasBudget?money(r.adTarget*F):'<span class=muted>set</span>'}</td>
-      <td class="${budCls}">${r.dailyBudget?money(r.dailyBudget*F):'<span class="muted">—</span>'}</td>
+      <td class="${budCls}">${r.dailyBudget?money(r.dailyBudget*F):'<span class="muted">—</span>'}${r.dailyPending!=null?`<span class="qdot" title="Requested ${money(r.dailyPending*F)}/day — queued. Google Ads applies it on the next hourly run${r.dailyApplied?` (was ${money(r.dailyApplied*F)})`:''}.">queued</span>`:''}</td>
       <td class="muted">${r.hasBudget?money(r.reqDaily*F):'—'}</td>
       <td class="pace ${paceCls}">${r.hasBudget?pct(r.pace):'—'}</td>
       <td class="${onCls}" title="${r.hasBudget?`projected ${money(r.projected*F)} vs target ${money(r.adTarget*F)} (${r.delta>=0?'+':''}${money(r.delta*F)})`:''}">${r.hasBudget?pct(r.onTarget):'—'}</td>
