@@ -257,6 +257,7 @@
   .oppcard .opp-tbl{margin-top:10px}
   .oppcard .opp-tbl .opp-r-good td{background:rgba(46,196,122,.09)}
   .oppcard .opp-tbl .opp-r-bad td{background:rgba(239,93,93,.09)}
+  .opp-ganote{background:rgba(230,171,63,.1);border:1px solid rgba(230,171,63,.4);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px;line-height:1.45;color:var(--ink)}
   .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
   .hcount:empty{display:none}
   .qdot{display:inline-block;margin-left:6px;font:700 8.5px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);border:1px solid rgba(242,103,34,.5);border-radius:999px;padding:0 6px;vertical-align:middle;cursor:help}
@@ -1777,6 +1778,9 @@ function renderOpps(){
     }).join('') : `<div class="muted" style="font-size:13px">No clear budget-shift opportunities right now${PREFETCHED?'':' — loading campaign data…'}.</div>`;
   }
   const stale=staleList();
+  const gaConnected = !!(DATA && (DATA.googleChanges||[]).length);
+  const gaNote = gaConnected ? '' :
+    `<div class="opp-ganote">⚠ The Google Ads change feed isn't connected yet, so this only counts changes made <b>in this tool</b> — an account edited <b>directly in Google Ads</b> may show here by mistake. Fix: install the change-history Ads script (writes the <b>Google_Changes</b> tab).</div>`;
   const staleHtml = stale.length
     ? `<table class="mvtbl cltbl" style="margin-top:4px"><thead><tr><th>Franchise</th><th>Last change</th><th></th></tr></thead><tbody>`
       + stale.map(s=>`<tr><td><b class="cl-fr" onclick="openDD('${s.r.k}')">${esc(s.r.name)}</b></td><td class="d">${s.last?esc(clTs_(s.last)):'<span class="muted">never</span>'}</td><td><button class="ghost" onclick="openDD('${s.r.k}')">Open →</button></td></tr>`).join('')
@@ -1785,7 +1789,7 @@ function renderOpps(){
   el.innerHTML = `<div class="opp-sec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one. <b>Pause</b> queues the change to Google Ads (hourly apply + confirmation email); <b>Open account</b> lets you fine-tune the budget split.</div>${optHtml}`
     + `<div class="opp-sec-h" style="margin-top:26px">Stale — no change in 30 days (${stale.length})</div>`
-    + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${staleHtml}`;
+    + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${gaNote}${staleHtml}`;
 }
 // Deploy: queue the pause for the costly campaign, then refresh this view.
 async function deployPause(btn, k, campaign, campaignId){
