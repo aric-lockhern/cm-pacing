@@ -203,6 +203,14 @@
   .mvtbl td.num{text-align:right}
   .mvtbl .voidbtn{cursor:pointer;color:var(--bad);border:none;background:none;font-size:13px}
   .mvtbl tr.voided td{opacity:.45;text-decoration:line-through}
+  .cltbl .d{color:var(--muted);white-space:nowrap;font-size:11.5px}
+  .cltbl .cl-fr{cursor:pointer}
+  .cltbl .cl-fr:hover{color:var(--accent);text-decoration:underline}
+  .cl-kind{display:inline-block;font:700 9.5px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.5px;padding:1px 7px;border-radius:999px;white-space:nowrap}
+  .cl-budget{background:rgba(95,107,255,.16);color:#aeb6ff}
+  .cl-daily{background:rgba(255,255,255,.07);color:var(--muted)}
+  .cl-move{background:rgba(242,103,34,.16);color:#f5a06a}
+  .cl-campaign{background:rgba(230,171,63,.16);color:#e6ab3f}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
 
   /* overview / exec view */
@@ -289,6 +297,7 @@
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
+  <button class="ghost" onclick="openChangeLog()" title="Full change log across all franchises — budget edits, daily-budget requests, channel moves and campaign pause/activate">Change log</button>
   <button class="ghost" onclick="openMoves()" title="Log a budget move between channels (e.g. Google → LSA) without editing the master sheet">Budget moves</button>
   <button class="ghost" onclick="openSettings()">Settings</button>
   <button class="ghost" onclick="load(true)">Refresh</button>
@@ -477,6 +486,17 @@
   </div>
 </div>
 
+<!-- master change log (every logged change across all franchises) -->
+<div class="scrim" id="clScrim" onclick="if(event.target===this)closeChangeLog()">
+  <div class="modal">
+    <button class="close ghost" onclick="closeChangeLog()">Close</button>
+    <h2>Change log</h2>
+    <div class="hint">Every logged change across all franchises — budget edits, daily-budget requests, channel moves and campaign pause/activate — newest first. Click a franchise to see just its history. Each franchise's own log is also in its detail view (click a row).</div>
+    <div class="settings-row"><label>Filter</label><input id="clFilter" placeholder="franchise name…" oninput="renderChangeLogModal()" style="flex:1"></div>
+    <div id="clBody" style="margin-top:8px"></div>
+  </div>
+</div>
+
 <script>
 /* ═══════════════ CONFIG — replace these two per agency ═══════════════ */
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
@@ -496,7 +516,7 @@ const LS = {
   url:    () => localStorage.getItem('pace_url')    || DEFAULT_WEBAPP_URL,
   secret: () => localStorage.getItem('pace_secret') || DEFAULT_SECRET,
   name:   () => localStorage.getItem('pace_name')   || '',
-  sort:   () => localStorage.getItem('pace_sort')   || 'pace',
+  sort:   () => localStorage.getItem('pace_sort')   || 'name',   // default: franchise A→Z
   view:   () => localStorage.getItem('pace_view')   || 'active',
 };
 
@@ -1200,7 +1220,7 @@ function gfx(r){
 }
 function setMarkup(on){ MARKUP=!!on; localStorage.setItem('pace_markup', on?'1':'0'); render(); if(DD.k) renderDD(); }
 let sortKey = LS.sort();
-let sortDir = -1;
+let sortDir = (sortKey==='name'||sortKey==='type'||sortKey==='live') ? 1 : -1;   // name/type/live ascending
 let view = LS.view();
 const now = new Date();
 // Everything is AS OF YESTERDAY — today is still running, so its partial numbers
@@ -2156,6 +2176,8 @@ function openDD(k){
     <canvas id="ddCanvas" width="760" height="240"></canvas>
     <div id="ddTable"></div>
     <div id="ddSplit"></div>
+    <h3 style="margin:18px 0 4px">Change log</h3>
+    <div id="ddChangelog"></div>
     <div class="settings-row" style="margin-top:14px"><label></label>
       <button onclick="openFlag('${r.k}')">Email flag</button>
       <button class="ghost" onclick="setHidden('${r.k}',${r.hidden?'false':'true'})">${r.hidden?'Restore to tool':'Remove from tool'}</button>
@@ -2169,6 +2191,7 @@ function openDD(k){
     .map(g=>`<button data-g="${g[0]}" onclick="ddSet('gran','${g[0]}')">${g[1]}</button>`).join('');
   document.getElementById('ddScrim').classList.add('on');
   renderDD();
+  renderChangeLog(document.getElementById('ddChangelog'), r.k, 50);
   ensureCampaigns(r);
 }
 
@@ -2469,6 +2492,65 @@ function renderMovesLedger(){
       + `</tr>`;
   }).join('');
   el.innerHTML=`<table class="mvtbl"><thead><tr><th>Month</th><th>Franchise</th><th>Move</th><th class="num">Amount</th><th class="num">Remaining</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+}
+/* ── change log ───────────────────────────────────────────────────────────────
+ * One timeline from the four change sources already in the payload: budget-value
+ * edits (Budget_Changes), daily-budget requests (Budget_Queue), channel moves
+ * (Budget_Moves) and campaign pause/activate (Campaign_Queue). Shown whole in the
+ * header "Change log" modal, and filtered to one franchise in its detail view. */
+function clTs_(v){ const s=String(v||''); const t=new Date(s);
+  return isNaN(t) ? s : isoLocal(t)+' '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0'); }
+function changeLogEntries(){
+  if(!DATA) return [];
+  const out=[];
+  (DATA.budgetLog||[]).forEach(r=>{ const o=Number(r.Old)||0, n=Number(r.New)||0;
+    out.push({ ts:String(r.Timestamp||''), franchise:String(r.Label||'').trim(), slug:'budget', kind:'Budget',
+      who:(String(r.Source||'')==='auto'?'auto':String(r.Source||'')),
+      detail:`${String(r.Platform||'')} ${String(r.Month||'')} ${money(o)} → ${money(n)}`.replace(/\s+/g,' ').trim(),
+      status:String(r.Ack||'').trim()?'reviewed':'' }); });
+  (DATA.budgetQueue||[]).forEach(r=>{
+    out.push({ ts:String(r.Timestamp||''), franchise:String(r.Label||'').trim(), slug:'daily', kind:'Daily budget',
+      who:String(r.RequestedBy||''),
+      detail:`daily budget → ${money(Number(r.NewDailyBudget)||0)}${r.Note?(' · '+r.Note):''}`,
+      status:String(r.Status||'') }); });
+  (DATA.budgetMoves||[]).forEach(r=>{ const voided=String(r.Void).trim().toLowerCase()==='true';
+    out.push({ ts:String(r.Timestamp||''), franchise:String(r.Franchise||'').trim(), slug:'move', kind:'Channel move',
+      who:String(r.By||''),
+      detail:`${String(r.From||'')} → ${String(r.To||'')} ${money(Number(r.Amount)||0)}${r.Note?(' · '+r.Note):''}`,
+      status: voided?'voided':'' }); });
+  (DATA.campaignQueue||[]).forEach(r=>{
+    out.push({ ts:String(r.Timestamp||''), franchise:String(r.Label||'').trim(), slug:'campaign', kind:'Campaign',
+      who:String(r.RequestedBy||''),
+      detail:`${String(r.Action||'').toLowerCase()} ${String(r.Campaign||'')}${r.Note?(' · '+r.Note):''}`.trim(),
+      status:String(r.Status||'') }); });
+  return out.sort((a,b)=> String(b.ts).localeCompare(String(a.ts)));
+}
+function renderChangeLogTable(el, entries, showFranchise, limit){
+  if(!el) return;
+  if(!entries.length){ el.innerHTML='<div class="muted" style="font-size:13px">No changes logged yet.</div>'; return; }
+  const shown=limit?entries.slice(0,limit):entries;
+  const body=shown.map(e=>`<tr>`
+    +`<td class="d">${esc(clTs_(e.ts))}</td>`
+    +(showFranchise?`<td><b class="cl-fr" onclick="clSet('${jsStr(e.franchise)}')">${esc(e.franchise||'—')}</b></td>`:'')
+    +`<td><span class="cl-kind cl-${e.slug}">${esc(e.kind)}</span></td>`
+    +`<td>${esc(e.detail)}</td>`
+    +`<td>${esc(e.who||'—')}</td>`
+    +`<td>${e.status?`<span class="muted">${esc(e.status)}</span>`:''}</td>`
+    +`</tr>`).join('');
+  el.innerHTML=`<table class="mvtbl cltbl"><thead><tr><th>When</th>${showFranchise?'<th>Franchise</th>':''}<th>Type</th><th>Change</th><th>By</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`
+    + (limit && entries.length>limit?`<div class="muted" style="font-size:12px;margin-top:6px">Showing ${limit} of ${entries.length}.</div>`:'');
+}
+// franchise-scoped log for the detail view (exact franchise key)
+function renderChangeLog(el, fk, limit){
+  renderChangeLogTable(el, changeLogEntries().filter(e=>key(e.franchise)===fk), false, limit);
+}
+function openChangeLog(){ const f=document.getElementById('clFilter'); if(f) f.value=''; renderChangeLogModal(); document.getElementById('clScrim').classList.add('on'); }
+function closeChangeLog(){ document.getElementById('clScrim').classList.remove('on'); }
+function clSet(name){ const f=document.getElementById('clFilter'); if(f) f.value=name; renderChangeLogModal(); }
+function renderChangeLogModal(){
+  const q=key((document.getElementById('clFilter')||{}).value||'');
+  const rows=changeLogEntries().filter(e=> !q || key(e.franchise).includes(q));
+  renderChangeLogTable(document.getElementById('clBody'), rows, true, 300);
 }
 async function saveSettings(){
   // personal
