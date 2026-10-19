@@ -72,6 +72,11 @@
   .ub-x:hover{color:var(--ink);border-color:var(--accent);background:rgba(95,107,255,.14)}
   .ub-h .ub-x{margin-left:auto}
   .row-nobudget{color:#fff;background:var(--bad);border-color:var(--bad);font-weight:700}
+  .warnbanner{border:1px solid rgba(230,171,63,.5);background:rgba(230,171,63,.1);border-radius:10px;padding:12px 15px;margin-bottom:14px;box-shadow:0 0 0 1px rgba(230,171,63,.12),0 8px 30px rgba(230,171,63,.08)}
+  .warnbanner .wb-h{font-weight:800;color:var(--warn);font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .warnbanner .ub-row{font-size:13px;padding:2px 0;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .warnbanner .ub-row b{color:var(--warn)}
+  .warnbanner .ub-grow{flex:1}
   .budgetbanner{border:1px solid rgba(95,107,255,.45);background:rgba(95,107,255,.1);border-radius:10px;padding:11px 14px;margin-bottom:14px}
   .budgetbanner .bb-h{font-weight:700;color:var(--accent);font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:7px}
   .budgetbanner .bb-row{font-size:13px;padding:2px 0;color:var(--ink)}
@@ -291,6 +296,7 @@
 
 <main>
   <div id="urgentBanner"></div>
+  <div id="metaUntaggedBanner"></div>
   <div id="totals" class="totals"></div>
   <div id="integrityNote" class="integrity-note"></div>
 
@@ -531,7 +537,7 @@ let EXEC_DATA = null;
 let EXEC_CHART_MODE = 'time';
 let INSIGHTS = false;   // Insights (analytics) tab open
 // Elements that make up the normal (per-channel) view, hidden while Exec is open.
-const MAIN_ELS = ['urgentBanner','totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
+const MAIN_ELS = ['urgentBanner','metaUntaggedBanner','totals','integrityNote','budgetBanner','alerts','mainToolbar','tbl','emptyState'];
 function showMain(on){ MAIN_ELS.forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = on?'':'none'; }); }
 
 // Account (brand) = the part before " - " in a franchise label, with a couple of
@@ -1762,6 +1768,7 @@ function render(){
   document.getElementById('hTarget').textContent = isLSA ? (MARKUP?'Approved pool':'Ad Spend Pool') : (MARKUP ? 'Budget' : 'Ad Spend Target');
   document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
   renderUrgent();
+  renderMetaUntagged();
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
@@ -1810,6 +1817,20 @@ function renderUrgent(){
   const rows=hits.map(h=>`<div class="ub-row"><span class="ub-grow"><b>${esc(h.label)}</b> · ${esc(h.platform)} — spending <b>${money(h.spend)}</b> this month with <b>no budget on record</b></span><span class="ub-x" title="Acknowledge for ${MONTH} — hides this account until next month" onclick="dismissNoBudget('${jsStr(h.platform)}','${jsStr(h.k)}')">acknowledge ✕</span></div>`).join('');
   el.innerHTML=`<div class="urgentbanner"><div class="ub-h">⚠ Spending with NO budget — ${hits.length} account${hits.length===1?'':'s'} (${MONTH})<span class="ub-x" title="Acknowledge all ${hits.length} for ${MONTH}" onclick="dismissAllNoBudget()">acknowledge all ✕</span></div>${rows}
     <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">We should never spend without an approved budget. Most often this means ${MONTH}'s budget column wasn't pulled in — check <b>Settings ▸ Budgets</b> (columns now auto-extend after redeploy), or confirm the budget in the master sheet. <b>LSA</b> runs on a pooled budget, so acknowledge any that are intentional.</div></div>`;
+}
+
+// Meta campaigns that spent this month but carry no franchise tag are dropped from the feed
+// (the gateway maps Meta → franchise by Campaign tag). Surface them so missing-tag spend is
+// visible — the fix is to tag the campaign in Meta to match the franchise's master name.
+function renderMetaUntagged(){
+  const el=document.getElementById('metaUntaggedBanner'); if(!el) return;
+  const hits=(CHANNEL==='meta' && DATA) ? (DATA.metaUntagged||[]).filter(r=>Number(r.Spend)>0.5) : [];
+  if(!hits.length){ el.innerHTML=''; return; }
+  hits.sort((a,b)=>Number(b.Spend)-Number(a.Spend));
+  const total=hits.reduce((a,r)=>a+Number(r.Spend||0),0);
+  const rows=hits.map(h=>`<div class="ub-row"><span class="ub-grow"><b>${esc(h.Campaign)}</b>${h.Account?` · <span class="muted">${esc(h.Account)}</span>`:''} — spent <b>${money(Number(h.Spend))}</b> this month</span></div>`).join('');
+  el.innerHTML=`<div class="warnbanner"><div class="wb-h">⚠ Untagged Meta spend — ${hits.length} campaign${hits.length===1?'':'s'}, ${money(total)} not in any franchise (${MONTH})</div>${rows}
+    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">These campaigns have no <b>Campaign tag</b> in Meta, so their spend isn't counted toward any franchise here. Add the tag in Meta (match the franchise's master name exactly), then <b>Settings ▸ Meta ▸ Sync</b>.</div></div>`;
 }
 
 function renderTotals(){
