@@ -1834,17 +1834,21 @@ async function emailOpps(btn){
   if(!recs.length){ alert('No budget-shift opportunities right now.'); return; }
   if(!confirm(`Email ${recs.length} budget-shift recommendation${recs.length===1?'':'s'} to Larry & Manuel (cc ${TEAM_EMAIL_CC}) for review?`)) return;
   if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  // short campaign label — drop the franchise prefix so only the type shows (PMax / Search)
+  const campShort = (name, fr)=>{ const n=String(name||'').trim(), f=String(fr||'').trim();
+    if(f && n.toLowerCase()===f.toLowerCase()) return 'Search';
+    if(f && n.toLowerCase().startsWith(f.toLowerCase()+' - ')) return n.slice(f.length+3);
+    return n; };
   const payload = {
     title: `Budget-shift opportunities (${recs.length})`,
-    subtitle: `Campaigns converting much cheaper than a sibling (as of ${isoLocal(ASOF)}). Review and shift budget into the efficient one; pause or trim the costly one.`,
-    columns: ['Franchise','Recommendation','Efficient (CPL · leads)','Costly (CPL · leads)'], leftCols: 2,
+    subtitle: `Shift budget to the cheaper-converting campaign; pause or trim the costly one. As of ${isoLocal(ASOF)}.`,
+    columns: ['Franchise','Shift budget to →','CPL','Leads','Pause / trim','CPL','Leads'], leftCols: 1,
     rows: recs.map(({r,o})=>[
       r.name,
-      o.action==='pause' ? `Shift to ${o.best}, pause ${o.worst}` : `Shift ${o.worst} → ${o.best}`,
-      `${o.best} · ${money(o.bestCPL)} · ${fmtLeads(o.bestLeads)}`,
-      `${o.worst} · ${money(o.worstCPL)} · ${fmtLeads(o.worstLeads)}`
+      campShort(o.best, r.name),  money(o.bestCPL),  fmtLeads(o.bestLeads),
+      campShort(o.worst, r.name), money(o.worstCPL), fmtLeads(o.worstLeads)
     ]),
-    note: 'Suggested: move budget into the efficient campaign and pause or trim the costly one. Full detail (per-campaign CPL / leads) is on the tool’s Opportunities page.'
+    note: 'Full per-campaign detail is on the tool’s Opportunities page.'
   };
   try{
     const res = await call({action:'emailReport', to: TEAM_EMAIL_TO, cc: TEAM_EMAIL_CC, subject:'Pacing — budget-shift opportunities to review', payload: JSON.stringify(payload)});
