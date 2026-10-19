@@ -30,9 +30,9 @@
   header,main{position:relative;z-index:1}
   a{color:var(--accent);text-decoration:none}
   header{display:flex;align-items:center;gap:14px;padding:13px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(10,14,36,.78);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);z-index:5}
-  .brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.3px;font-size:15px}
-  .brand .cm{display:inline-flex;align-items:center;justify-content:center;width:27px;height:27px;border-radius:8px;background:var(--accent2);color:#fff;font-weight:800;font-size:12px;letter-spacing:.5px;box-shadow:0 3px 12px rgba(242,103,34,.4)}
-  .brand span{color:var(--muted);font:500 11px/1 var(--mono);text-transform:uppercase;letter-spacing:1.5px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.3px;font-size:15px}
+  .brand .cmlogo{height:23px;width:auto;display:block}
+  .brand .cmp{color:var(--muted);font:500 11px/1 var(--mono);text-transform:uppercase;letter-spacing:1.5px;border-left:1px solid var(--line);padding-left:10px}
   .chip{font:12px/1.5 var(--mono);padding:3px 10px;border-radius:999px;background:var(--chip);color:var(--muted);border:1px solid var(--line);text-transform:uppercase;letter-spacing:.5px;font-size:10.5px}
   .chip.live{color:var(--good);border-color:rgba(46,196,122,.4);background:rgba(46,196,122,.1)}
   .chip.err{color:var(--bad);border-color:rgba(239,93,93,.4);background:rgba(239,93,93,.1)}
@@ -300,7 +300,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><span class="cm">CM</span> Pacing <span>Content&nbsp;Massive</span></div>
+  <div class="brand"><img class="cmlogo" src="cm-logo.png" alt="ContentMassive"><span class="cmp">Pacing</span></div>
   <div class="seg" id="channelSeg" style="margin-left:6px">
     <button data-ch="google" onclick="setChannel('google')">Google Ads</button>
     <button data-ch="lsa" onclick="setChannel('lsa')">LSA</button>
@@ -2879,7 +2879,7 @@ function last_n_days(n){ const out=[]; const d=new Date(); d.setDate(d.getDate()
 function trend(series,n){ const days=last_n_days(n); let spend=0,conv=0; days.forEach(k=>{ if(series[k]){spend+=series[k].spend;conv+=series[k].conv;} }); return {spend,conv}; }
 
 document.querySelector('.brand').innerHTML =
-  '<span class="cm">CM</span> Pacing <span>Content&nbsp;Massive</span>';
+  '<img class="cmlogo" src="cm-logo.png" alt="ContentMassive"><span class="cmp">Pacing</span>';
 load();
 </script>
 </body>
