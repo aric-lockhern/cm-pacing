@@ -247,6 +247,16 @@
   .rec-a{white-space:nowrap}
   .rec-a button{font-size:12px;padding:5px 11px}
   .optcard{background:rgba(95,107,255,.1);border:1px solid rgba(95,107,255,.4);border-radius:8px;padding:9px 12px;margin:10px 0;font-size:13px;line-height:1.45}
+  .opp-sec-h{font:700 12px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:4px}
+  .oppcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+  .oppcard .opp-top{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .oppcard .opp-top b{font-size:16px}
+  .oppcard .opp-act{margin-left:auto;display:flex;gap:8px;white-space:nowrap}
+  .oppcard .opp-act button{font-size:12px;padding:6px 13px}
+  .oppcard .opp-rec{font-size:14px;line-height:1.4;margin-bottom:8px}
+  .oppcard .opp-cmp{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px}
+  .oppcard .opp-good{color:var(--good)} .oppcard .opp-bad{color:var(--bad)}
+  .oppcard .opp-good b,.oppcard .opp-bad b{color:var(--ink)}
   .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
   .hcount:empty{display:none}
   .qdot{display:inline-block;margin-left:6px;font:700 8.5px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);border:1px solid rgba(242,103,34,.5);border-radius:999px;padding:0 6px;vertical-align:middle;cursor:help}
@@ -302,7 +312,7 @@
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
-  <button class="ghost" id="oppBtn" onclick="openOpportunities()" title="Budget-shift opportunities and accounts with no change in 30 days">Opportunities<span id="oppCount" class="hcount"></span></button>
+  <button class="ghost" id="oppBtn" onclick="showOpportunities()" title="Budget-shift opportunities and accounts with no change in 30 days">Opportunities<span id="oppCount" class="hcount"></span></button>
   <button class="ghost" onclick="openChangeLog()" title="Full change log across all franchises — budget edits, daily-budget requests, channel moves and campaign pause/activate">Change log</button>
   <button class="ghost" onclick="openMoves()" title="Log a budget move between channels (e.g. Google → LSA) without editing the master sheet">Budget moves</button>
   <button class="ghost" onclick="openSettings()">Settings</button>
@@ -357,6 +367,7 @@
 
   <div id="execView" style="display:none"></div>
   <div id="insightsView" style="display:none"></div>
+  <div id="oppsView" style="display:none"></div>
 </main>
 
 <!-- deep dive -->
@@ -492,16 +503,6 @@
   </div>
 </div>
 
-<!-- opportunities: budget-shift recommendations + stale (no change in 30d) accounts -->
-<div class="scrim" id="optScrim" onclick="if(event.target===this)closeOpportunities()">
-  <div class="modal">
-    <button class="close ghost" onclick="closeOpportunities()">Close</button>
-    <h2>Opportunities</h2>
-    <div class="hint">Two things worth acting on: campaigns converting much cheaper than a sibling (shift budget in, pause the costly one), and active accounts we haven't touched in 30 days. Everything here is advisory — act with the <b>Pause</b> / <b>Apply</b> buttons in each account.</div>
-    <div id="optBody" style="margin-top:8px"></div>
-  </div>
-</div>
-
 <!-- master change log (every logged change across all franchises) -->
 <div class="scrim" id="clScrim" onclick="if(event.target===this)closeChangeLog()">
   <div class="modal">
@@ -556,13 +557,16 @@ let CHANNEL = localStorage.getItem('pace_channel') || 'google';
 function setChannel(ch){
   const wasExec = EXEC || INSIGHTS;
   EXEC = false; localStorage.setItem('pace_exec','0'); INSIGHTS = false;
-  if(CHANNEL===ch && !wasExec) return;
+  const wasOpps = OPPS; OPPS = false;
+  if(CHANNEL===ch && !wasExec && !wasOpps) return;
   CHANNEL = ch; localStorage.setItem('pace_channel', ch);
   closeDD();
   document.getElementById('execView').style.display = 'none';
   document.getElementById('insightsView').style.display = 'none';
+  document.getElementById('oppsView').style.display = 'none';
   const ob=document.getElementById('overviewBtn'); if(ob) ob.classList.remove('on');
   const ib=document.getElementById('insightsBtn'); if(ib) ib.classList.remove('on');
+  const pb=document.getElementById('oppBtn'); if(pb) pb.classList.remove('on');
   showMain(true);
   if(DATA){ build(); render(); if(ch==='google') setTimeout(()=>prefetchCampaigns(), 30); }
 }
@@ -589,12 +593,14 @@ function brandOf(label){
 function marketOf(label){ const p=String(label||'').split(' - '); return p.length>1 ? p.slice(1).join(' - ').trim() : '—'; }
 
 function showExec(){
-  EXEC = true; localStorage.setItem('pace_exec','1'); INSIGHTS = false; closeDD();
+  EXEC = true; localStorage.setItem('pace_exec','1'); INSIGHTS = false; OPPS = false; closeDD();
   showMain(false);
   document.getElementById('execView').style.display = 'block';
   document.getElementById('insightsView').style.display = 'none';
+  document.getElementById('oppsView').style.display = 'none';
   document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
   document.getElementById('insightsBtn').classList.remove('on');
+  document.getElementById('oppBtn').classList.remove('on');
   document.getElementById('overviewBtn').classList.add('on');
   document.getElementById('monthLabel').textContent = `Overview · YTD ${now.getFullYear()}`;
   if(DATA) renderExec();
@@ -907,12 +913,14 @@ function insPreset(which){
   renderInsights();
 }
 function showInsights(){
-  INSIGHTS=true; EXEC=false; localStorage.setItem('pace_exec','0'); closeDD();
+  INSIGHTS=true; EXEC=false; OPPS=false; localStorage.setItem('pace_exec','0'); closeDD();
   showMain(false);
   document.getElementById('execView').style.display='none';
   document.getElementById('insightsView').style.display='block';
+  document.getElementById('oppsView').style.display='none';
   document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
   document.getElementById('overviewBtn').classList.remove('on');
+  document.getElementById('oppBtn').classList.remove('on');
   document.getElementById('insightsBtn').classList.add('on');
   document.getElementById('monthLabel').textContent = 'Insights';
   if(!INS) INS=insDefault();
@@ -1710,37 +1718,72 @@ function staleList(){
   }).filter(Boolean);
 }
 function optRecs(){ return CHANNEL==='google' ? MODEL.filter(r=>r.live&&!r.hidden).map(r=>({r,o:campaignOpt(r)})).filter(x=>x.o) : []; }
-function openOpportunities(){
-  renderOpportunities(); document.getElementById('optScrim').classList.add('on');
-  prefetchCampaigns().then(()=>{ if(document.getElementById('optScrim').classList.contains('on')) renderOpportunities(); });
+
+/* Opportunities is its OWN view (like Overview / Insights), not a modal. */
+let OPPS = false;
+function showOpportunities(){
+  OPPS = true; EXEC = false; INSIGHTS = false; localStorage.setItem('pace_exec','0'); closeDD();
+  showMain(false);
+  document.getElementById('execView').style.display = 'none';
+  document.getElementById('insightsView').style.display = 'none';
+  document.getElementById('oppsView').style.display = 'block';
+  document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.remove('on'));
+  const ob=document.getElementById('overviewBtn'); if(ob) ob.classList.remove('on');
+  const ib=document.getElementById('insightsBtn'); if(ib) ib.classList.remove('on');
+  document.getElementById('oppBtn').classList.add('on');
+  document.getElementById('monthLabel').textContent = 'Opportunities';
+  if(DATA){ renderOpps(); prefetchCampaigns().then(()=>{ if(OPPS) renderOpps(); }); }
 }
-function closeOpportunities(){ document.getElementById('optScrim').classList.remove('on'); }
-function renderOpportunities(){
-  const el=document.getElementById('optBody'); if(!el) return;
+// find a franchise's worst/efficient campaign ids + status from the Google feed
+function campMeta_(r, name){
+  const list = gCampBudgets()[r.k] || [];
+  return list.find(c=> c.campaign===name) || list.find(c=> key(c.campaign)===key(name)) || null;
+}
+function renderOpps(){
+  const el=document.getElementById('oppsView'); if(!el) return;
   let optHtml;
   if(CHANNEL!=='google'){
     optHtml=`<div class="muted" style="font-size:13px">Switch to the <b>Google Ads</b> tab for campaign budget-shift recommendations.</div>`;
   } else {
     const recs=optRecs();
-    optHtml = recs.length
-      ? `<table class="mvtbl cltbl"><thead><tr><th>Franchise</th><th>Recommendation</th><th>Efficient</th><th>Costly</th></tr></thead><tbody>`
-        + recs.map(({r,o})=>`<tr><td><b class="cl-fr" onclick="closeOpportunities();openDD('${r.k}')">${esc(r.name)}</b></td>`
-          + `<td>${o.action==='pause'?('shift to '+esc(o.best)+', pause '+esc(o.worst)):('shift '+esc(o.worst)+' → '+esc(o.best))}</td>`
-          + `<td><span class="pos">${esc(o.best)} · ${money(o.bestCPL)}</span></td>`
-          + `<td><span class="neg">${esc(o.worst)} · ${money(o.worstCPL)}</span></td></tr>`).join('')
-        + `</tbody></table>`
-      : `<div class="muted" style="font-size:13px">No clear budget-shift opportunities right now${PREFETCHED?'':' — loading campaign data…'}.</div>`;
+    const cq=campaignQueueStatus();
+    optHtml = recs.length ? recs.map(({r,o})=>{
+      const worstC=campMeta_(r,o.worst), bestC=campMeta_(r,o.best);
+      const q = worstC && ((worstC.id && cq.byId[worstC.id]) || cq.byName[(r.name+'||'+o.worst).toLowerCase()]);
+      const pausePending = q && q.status==='pending' && q.action==='pause';
+      const canPause = worstC && worstC.id && worstC.status==='active' && !pausePending;
+      const up = o.extraLeads>0 ? `<div class="muted" style="font-size:12px;margin-top:3px">Could net ~<b>${o.extraLeads}</b> more leads/mo at ${esc(o.best)}'s CPL.</div>` : '';
+      const pauseBtn = pausePending
+        ? `<span class="chip">pause queued…</span>`
+        : canPause
+          ? `<button class="primary" onclick="deployPause(this,'${r.k}','${jsStr(o.worst)}','${esc(worstC.id)}')">Pause ${esc(o.worst)}</button>`
+          : (worstC && worstC.status!=='active' ? `<span class="chip">${esc(o.worst)} already paused</span>` : '');
+      return `<div class="oppcard">
+        <div class="opp-top"><b class="cl-fr" onclick="openDD('${r.k}')">${esc(r.name)}</b>
+          <span class="opp-act">${pauseBtn} <button class="ghost" onclick="openDD('${r.k}')">Open account →</button></span></div>
+        <div class="opp-rec">Shift budget into <b class="pos">${esc(o.best)}</b> and ${o.action==='pause'?'<b>pause</b>':'ease off'} <b class="neg">${esc(o.worst)}</b>.</div>
+        <div class="opp-cmp">
+          <span class="opp-good">✅ ${esc(o.best)} — <b>${money(o.bestCPL)}</b> CPL · ${fmtLeads(o.bestLeads)} leads (30d)</span>
+          <span class="opp-bad">⚠️ ${esc(o.worst)} — <b>${money(o.worstCPL)}</b> CPL · ${fmtLeads(o.worstLeads)} leads (30d)</span>
+        </div>${up}</div>`;
+    }).join('') : `<div class="muted" style="font-size:13px">No clear budget-shift opportunities right now${PREFETCHED?'':' — loading campaign data…'}.</div>`;
   }
   const stale=staleList();
   const staleHtml = stale.length
-    ? `<table class="mvtbl cltbl"><thead><tr><th>Franchise</th><th>Last change</th></tr></thead><tbody>`
-      + stale.map(s=>`<tr><td><b class="cl-fr" onclick="closeOpportunities();openDD('${s.r.k}')">${esc(s.r.name)}</b></td><td class="d">${s.last?esc(clTs_(s.last)):'<span class="muted">never</span>'}</td></tr>`).join('')
+    ? `<table class="mvtbl cltbl" style="margin-top:4px"><thead><tr><th>Franchise</th><th>Last change</th><th></th></tr></thead><tbody>`
+      + stale.map(s=>`<tr><td><b class="cl-fr" onclick="openDD('${s.r.k}')">${esc(s.r.name)}</b></td><td class="d">${s.last?esc(clTs_(s.last)):'<span class="muted">never</span>'}</td><td><button class="ghost" onclick="openDD('${s.r.k}')">Open →</button></td></tr>`).join('')
       + `</tbody></table>`
     : `<div class="muted" style="font-size:13px">Every active account has a change logged in the last 30 days.</div>`;
-  el.innerHTML = `<div class="rec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
-    + `<div class="muted" style="font-size:12px;margin-bottom:8px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one.</div>${optHtml}`
-    + `<div class="rec-h" style="margin-top:18px">Stale — no change in 30 days (${stale.length})</div>`
-    + `<div class="muted" style="font-size:12px;margin-bottom:8px">Active accounts we haven't touched in a month. Review and optimize.</div>${staleHtml}`;
+  el.innerHTML = `<div class="opp-sec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
+    + `<div class="muted" style="font-size:13px;margin-bottom:10px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one. <b>Pause</b> queues the change to Google Ads (hourly apply + confirmation email); <b>Open account</b> lets you fine-tune the budget split.</div>${optHtml}`
+    + `<div class="opp-sec-h" style="margin-top:26px">Stale — no change in 30 days (${stale.length})</div>`
+    + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${staleHtml}`;
+}
+// Deploy: queue the pause for the costly campaign, then refresh this view.
+async function deployPause(btn, k, campaign, campaignId){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  await applyCampaignStatus(btn, r.name, campaign, campaignId, 'pause');
+  if(OPPS) renderOpps();
 }
 function updateOppCount(){
   const el=document.getElementById('oppCount'); if(!el) return;
@@ -1900,6 +1943,7 @@ function render(){
   renderUrgent();
   renderMetaUntagged();
   updateOppCount();
+  if(OPPS) renderOpps();
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
