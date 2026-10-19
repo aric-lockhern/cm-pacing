@@ -253,10 +253,10 @@
   .oppcard .opp-top b{font-size:16px}
   .oppcard .opp-act{margin-left:auto;display:flex;gap:8px;white-space:nowrap}
   .oppcard .opp-act button{font-size:12px;padding:6px 13px}
-  .oppcard .opp-rec{font-size:14px;line-height:1.4;margin-bottom:8px}
-  .oppcard .opp-cmp{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px}
-  .oppcard .opp-good{color:var(--good)} .oppcard .opp-bad{color:var(--bad)}
-  .oppcard .opp-good b,.oppcard .opp-bad b{color:var(--ink)}
+  .oppcard .opp-rec{font-size:14px;line-height:1.4}
+  .oppcard .opp-tbl{margin-top:10px}
+  .oppcard .opp-tbl .opp-r-good td{background:rgba(46,196,122,.09)}
+  .oppcard .opp-tbl .opp-r-bad td{background:rgba(239,93,93,.09)}
   .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
   .hcount:empty{display:none}
   .qdot{display:inline-block;margin-left:6px;font:700 8.5px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);border:1px solid rgba(242,103,34,.5);border-radius:999px;padding:0 6px;vertical-align:middle;cursor:help}
@@ -1734,6 +1734,8 @@ function showOpportunities(){
   document.getElementById('monthLabel').textContent = 'Opportunities';
   if(DATA){ renderOpps(); prefetchCampaigns().then(()=>{ if(OPPS) renderOpps(); }); }
 }
+// efficient / costly / avg vs the account's blended CPL (same thresholds as the deep-dive)
+function perfTagHtml(cpl, blended){ return (cpl&&blended)?(cpl<=blended*0.85?'<span class="pos">efficient</span>':cpl>=blended*1.15?'<span class="neg">costly</span>':'<span class="muted">avg</span>'):'—'; }
 // find a franchise's worst/efficient campaign ids + status from the Google feed
 function campMeta_(r, name){
   const list = gCampBudgets()[r.k] || [];
@@ -1758,14 +1760,20 @@ function renderOpps(){
         : canPause
           ? `<button class="primary" onclick="deployPause(this,'${r.k}','${jsStr(o.worst)}','${esc(worstC.id)}')">Pause ${esc(o.worst)}</button>`
           : (worstC && worstC.status!=='active' ? `<span class="chip">${esc(o.worst)} already paused</span>` : '');
+      // campaign table (same columns as the account's campaign breakdown)
+      const {perf, blendedCPL} = campaignPerf(r);
+      const caps = gCampBudgets()[r.k] || [];
+      const capOf = n => { const c=caps.find(x=>x.campaign===n)||caps.find(x=>key(x.campaign)===key(n)); return c?c.daily:null; };
+      const crows = Object.keys(perf).filter(n=>perf[n].spend>0||perf[n].conv>0)
+        .sort((a,b)=>perf[b].spend-perf[a].spend)
+        .map(n=>{ const p=perf[n], cap=capOf(n), cls=n===o.best?'opp-r-good':n===o.worst?'opp-r-bad':'';
+          return `<tr class="${cls}"><td>${esc(n)}</td><td>${cap!=null?money(cap):'—'}</td><td>${fmtLeads(p.conv)}</td><td>${p.cpl?money(p.cpl):'—'}</td><td>${perfTagHtml(p.cpl,blendedCPL)}</td></tr>`;
+        }).join('');
       return `<div class="oppcard">
         <div class="opp-top"><b class="cl-fr" onclick="openDD('${r.k}')">${esc(r.name)}</b>
           <span class="opp-act">${pauseBtn} <button class="ghost" onclick="openDD('${r.k}')">Open account →</button></span></div>
         <div class="opp-rec">Shift budget into <b class="pos">${esc(o.best)}</b> and ${o.action==='pause'?'<b>pause</b>':'ease off'} <b class="neg">${esc(o.worst)}</b>.</div>
-        <div class="opp-cmp">
-          <span class="opp-good">✅ ${esc(o.best)} — <b>${money(o.bestCPL)}</b> CPL · ${fmtLeads(o.bestLeads)} leads (30d)</span>
-          <span class="opp-bad">⚠️ ${esc(o.worst)} — <b>${money(o.worstCPL)}</b> CPL · ${fmtLeads(o.worstLeads)} leads (30d)</span>
-        </div>${up}</div>`;
+        <table class="ddtbl opp-tbl"><thead><tr><th>Campaign</th><th>Current Cap</th><th>Leads 30d</th><th>CPL 30d</th><th>Perf.</th></tr></thead><tbody>${crows}</tbody></table>${up}</div>`;
     }).join('') : `<div class="muted" style="font-size:13px">No clear budget-shift opportunities right now${PREFETCHED?'':' — loading campaign data…'}.</div>`;
   }
   const stale=staleList();
