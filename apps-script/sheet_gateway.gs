@@ -38,6 +38,7 @@ var TABS = {
   dailyLsa:   { name: 'Daily_LSA',     header: ['Date','Label','Spend','Conv'] },
   metaDaily:  { name: 'Meta_Daily',    header: ['Date','Label','Campaign','Spend','Impressions','Clicks','Leads/Conv','Revenue'] },
   metaFeed:   { name: 'Meta_Feed',     header: ['Label','DailyBudget','Status','Updated'] },
+  metaUntagged:{ name: 'Meta_Untagged', header: ['Campaign','Account','Spend','Updated'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
@@ -261,6 +262,7 @@ function getDataString_(force) {
     dailyLsa:   readTab_(ss, TABS.dailyLsa),
     metaDaily:  readTab_(ss, TABS.metaDaily),
     metaFeed:   readTab_(ss, TABS.metaFeed),
+    metaUntagged: readTab_(ss, TABS.metaUntagged),
     budgetQueue:readTab_(ss, TABS.budgetQueue),
     campaignQueue:readTab_(ss, TABS.campaignQueue),
     budgetMoves:readTab_(ss, TABS.budgetMoves),
@@ -531,6 +533,7 @@ function metaColMap_(H) {
     date:     pick(['Date', 'Day']),
     tag:      pick(['Campaign tags', 'Campaign tag', 'Tags', 'Tag']),
     campaign: pick(['Campaign name', 'Campaign']),
+    account:  pick(['Account name', 'Account']),                             // optional (untagged warning)
     spend:    pick(['Total Cost', 'Cost', 'Amount spent', 'Spend']),
     impr:     pick(['Impressions', 'Impr']),
     clicks:   pick(['Clicks', 'Link clicks']),
@@ -610,12 +613,22 @@ function syncMeta_(p) {
 
   var out = [], skipped = 0, tags = {};
   var feedByDate = {};   // date -> { tag -> {budget, active} }  (for the latest-day feed)
+  var untag = {}, thisMonth = currentDate_().slice(0, 7);   // untagged campaigns w/ spend THIS month
   for (var r = 1; r < values.length; r++) {
     var row = values[r];
     var camp = String(row[col.campaign] || '').trim();
     var spendRaw = parseNumber_(row[col.spend]);
     if (!camp && spendRaw == null) continue;                       // blank spacer row
-    if (metaNoTag_(row[col.tag])) { skipped++; continue; }         // no tag → inactive, excluded
+    if (metaNoTag_(row[col.tag])) {                                // no tag → excluded from the feed,
+      skipped++;                                                   // but tallied so the app can warn
+      var du = normalize_(row[col.date]);
+      if (camp && (spendRaw || 0) > 0 && String(du).slice(0, 7) === thisMonth) {
+        var acct = col.account < 0 ? '' : String(row[col.account] || '').trim();
+        var u = untag[camp] = untag[camp] || { campaign: camp, account: acct, spend: 0 };
+        u.spend += (spendRaw || 0);
+      }
+      continue;
+    }
     var date = normalize_(row[col.date]);
     if (!date) continue;
     var tag = String(row[col.tag]).trim();
@@ -664,9 +677,19 @@ function syncMeta_(p) {
   var fbody = [TABS.metaFeed.header].concat(feedRows);
   mf.getRange(1, 1, fbody.length, TABS.metaFeed.header.length).setValues(fbody);
 
+  // Untagged campaigns with spend this month — rewritten each sync. The app shows these
+  // as a warning so missing-tag spend is visible instead of silently dropped.
+  var untagRows = Object.keys(untag).map(function (c) {
+    return [untag[c].campaign, untag[c].account, round2_(untag[c].spend), now];
+  }).sort(function (a, b) { return b[2] - a[2]; });
+  var mu = ss.getSheetByName(TABS.metaUntagged.name) || ss.insertSheet(TABS.metaUntagged.name);
+  mu.clearContents();
+  var ubody = [TABS.metaUntagged.header].concat(untagRows);
+  mu.getRange(1, 1, ubody.length, TABS.metaUntagged.header.length).setValues(ubody);
+
   setConfigMany_({ metaSheetUrl: s.url, metaTab: s.tab, metaRange: s.range, lastMetaSync: currentDate_() });
   bustCache_();
-  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped, feed: feedRows.length };
+  return { ok: true, synced: out.length, franchises: Object.keys(tags).length, skipped: skipped, untagged: untagRows.length, feed: feedRows.length };
 }
 
 function round2_(n) { return Math.round(Number(n) * 100) / 100; }
