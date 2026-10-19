@@ -245,6 +245,9 @@
   .rec-t{flex:1;font-size:13px;line-height:1.35}
   .rec-a{white-space:nowrap}
   .rec-a button{font-size:12px;padding:5px 11px}
+  .optcard{background:rgba(95,107,255,.1);border:1px solid rgba(95,107,255,.4);border-radius:8px;padding:9px 12px;margin:10px 0;font-size:13px;line-height:1.45}
+  .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
+  .hcount:empty{display:none}
 
   /* wide tables scroll inside their own box so the page never scrolls sideways */
   .tablewrap,.exec-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -297,6 +300,7 @@
   </div>
   <div id="statusChip" class="chip">connecting…</div>
   <div class="grow"></div>
+  <button class="ghost" id="oppBtn" onclick="openOpportunities()" title="Budget-shift opportunities and accounts with no change in 30 days">Opportunities<span id="oppCount" class="hcount"></span></button>
   <button class="ghost" onclick="openChangeLog()" title="Full change log across all franchises — budget edits, daily-budget requests, channel moves and campaign pause/activate">Change log</button>
   <button class="ghost" onclick="openMoves()" title="Log a budget move between channels (e.g. Google → LSA) without editing the master sheet">Budget moves</button>
   <button class="ghost" onclick="openSettings()">Settings</button>
@@ -483,6 +487,16 @@
 
     <h3 style="margin:16px 0 4px">Ledger</h3>
     <div id="movesLedger"></div>
+  </div>
+</div>
+
+<!-- opportunities: budget-shift recommendations + stale (no change in 30d) accounts -->
+<div class="scrim" id="optScrim" onclick="if(event.target===this)closeOpportunities()">
+  <div class="modal">
+    <button class="close ghost" onclick="closeOpportunities()">Close</button>
+    <h2>Opportunities</h2>
+    <div class="hint">Two things worth acting on: campaigns converting much cheaper than a sibling (shift budget in, pause the costly one), and active accounts we haven't touched in 30 days. Everything here is advisory — act with the <b>Pause</b> / <b>Apply</b> buttons in each account.</div>
+    <div id="optBody" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -1637,6 +1651,92 @@ function campaignQueueStatus(){
 // Budget section inside the account deep-dive (Google only):
 //   1) PACE — what each campaign's budget is set to vs. what pace suggests (over/under)
 //   2) PERFORMANCE — each campaign's CPL vs the account's blended CPL (a second filter)
+/* ── per-campaign 30-day performance + optimization recs ──────────────────────
+ * campaignPerf: {perf:{name:{spend,conv,cpl}}, blendedCPL} over the last 30 days.
+ * campaignOpt: when one campaign converts much cheaper than a sibling, recommend
+ * shifting budget into it (and pausing the costly one if it's badly inefficient).
+ * Advisory only — acted on with the Pause / Apply buttons already in the detail view. */
+function campaignPerf(r){
+  const days=last_n_days(30), perf={}, camps=(r&&r.campaigns)||{};
+  Object.keys(camps).forEach(name=>{ let spend=0,conv=0; days.forEach(d=>{const s=camps[name][d]; if(s){spend+=s.spend;conv+=s.conv;}}); perf[name]={spend,conv,cpl:conv?spend/conv:0}; });
+  let bs=0,bc=0; Object.keys(perf).forEach(n=>{bs+=perf[n].spend;bc+=perf[n].conv;});
+  return { perf, blendedCPL: bc?bs/bc:0 };
+}
+const OPT = { minLeads:3, minFranchiseSpend:150, minWorstSpend:50, gap:1.75, pauseGap:2.5 };
+function campaignOpt(r){
+  if(!r || r.hidden) return null;
+  const {perf}=campaignPerf(r);
+  const names=Object.keys(perf).filter(n=>perf[n].spend>0 || perf[n].conv>0);
+  if(names.length<2) return null;
+  if(names.reduce((a,n)=>a+perf[n].spend,0) < OPT.minFranchiseSpend) return null;   // skip tiny accounts
+  const earners=names.filter(n=>perf[n].conv>=OPT.minLeads);                         // proven, cheap campaign to grow
+  if(!earners.length) return null;
+  const best=earners.reduce((a,n)=> perf[n].cpl<perf[a].cpl?n:a);
+  const bestCPL=perf[best].cpl; if(!bestCPL) return null;
+  const cands=names.filter(n=> n!==best && perf[n].spend>=OPT.minWorstSpend && perf[n].cpl>0);
+  if(!cands.length) return null;
+  const worst=cands.reduce((a,n)=> perf[n].cpl>perf[a].cpl?n:a);
+  const worstCPL=perf[worst].cpl;
+  if(worstCPL < bestCPL*OPT.gap) return null;                                        // not a meaningful gap
+  const action = worstCPL >= bestCPL*OPT.pauseGap ? 'pause' : 'shift';
+  const extraLeads = Math.max(0, Math.round(perf[worst].spend/bestCPL - perf[worst].conv));
+  return { best, worst, bestCPL, worstCPL, bestLeads:perf[best].conv, worstLeads:perf[worst].conv, action, extraLeads };
+}
+function optCallout(o){
+  const verb = o.action==='pause'
+    ? `shift budget to <b>${esc(o.best)}</b> and consider <b>pausing ${esc(o.worst)}</b>`
+    : `shift budget from <b>${esc(o.worst)}</b> into <b>${esc(o.best)}</b>`;
+  const up = o.extraLeads>0 ? ` <span class="muted">(~${o.extraLeads} more leads/mo at ${esc(o.best)}'s CPL)</span>` : '';
+  return `<div class="optcard">💡 <b>Optimize:</b> ${esc(o.best)} is converting at <b class="pos">${money(o.bestCPL)}</b> (${fmtLeads(o.bestLeads)} leads) vs ${esc(o.worst)} at <b class="neg">${money(o.worstCPL)}</b> (${fmtLeads(o.worstLeads)} leads) — ${verb}.${up}<div class="muted" style="font-size:11px;margin-top:3px">Advisory — tilt the Recommended boxes toward ${esc(o.best)} and use the Pause buttons below.</div></div>`;
+}
+// Active accounts with no logged change in the last 30 days (stale — need a look).
+function staleList(){
+  const last={};
+  changeLogEntries().forEach(e=>{ const k=key(e.franchise); if(!k) return; if(!last[k] || String(e.ts).localeCompare(last[k])>0) last[k]=String(e.ts); });
+  const cutMs=Date.now()-30*864e5;
+  return MODEL.filter(r=> r.live && !r.hidden).map(r=>{
+    const ts=last[r.k], t=ts?new Date(ts):null;
+    return (t && !isNaN(t) && t.getTime()>=cutMs) ? null : { r, last:ts||'' };
+  }).filter(Boolean);
+}
+function optRecs(){ return CHANNEL==='google' ? MODEL.filter(r=>r.live&&!r.hidden).map(r=>({r,o:campaignOpt(r)})).filter(x=>x.o) : []; }
+function openOpportunities(){
+  renderOpportunities(); document.getElementById('optScrim').classList.add('on');
+  prefetchCampaigns().then(()=>{ if(document.getElementById('optScrim').classList.contains('on')) renderOpportunities(); });
+}
+function closeOpportunities(){ document.getElementById('optScrim').classList.remove('on'); }
+function renderOpportunities(){
+  const el=document.getElementById('optBody'); if(!el) return;
+  let optHtml;
+  if(CHANNEL!=='google'){
+    optHtml=`<div class="muted" style="font-size:13px">Switch to the <b>Google Ads</b> tab for campaign budget-shift recommendations.</div>`;
+  } else {
+    const recs=optRecs();
+    optHtml = recs.length
+      ? `<table class="mvtbl cltbl"><thead><tr><th>Franchise</th><th>Recommendation</th><th>Efficient</th><th>Costly</th></tr></thead><tbody>`
+        + recs.map(({r,o})=>`<tr><td><b class="cl-fr" onclick="closeOpportunities();openDD('${r.k}')">${esc(r.name)}</b></td>`
+          + `<td>${o.action==='pause'?('shift to '+esc(o.best)+', pause '+esc(o.worst)):('shift '+esc(o.worst)+' → '+esc(o.best))}</td>`
+          + `<td><span class="pos">${esc(o.best)} · ${money(o.bestCPL)}</span></td>`
+          + `<td><span class="neg">${esc(o.worst)} · ${money(o.worstCPL)}</span></td></tr>`).join('')
+        + `</tbody></table>`
+      : `<div class="muted" style="font-size:13px">No clear budget-shift opportunities right now${PREFETCHED?'':' — loading campaign data…'}.</div>`;
+  }
+  const stale=staleList();
+  const staleHtml = stale.length
+    ? `<table class="mvtbl cltbl"><thead><tr><th>Franchise</th><th>Last change</th></tr></thead><tbody>`
+      + stale.map(s=>`<tr><td><b class="cl-fr" onclick="closeOpportunities();openDD('${s.r.k}')">${esc(s.r.name)}</b></td><td class="d">${s.last?esc(clTs_(s.last)):'<span class="muted">never</span>'}</td></tr>`).join('')
+      + `</tbody></table>`
+    : `<div class="muted" style="font-size:13px">Every active account has a change logged in the last 30 days.</div>`;
+  el.innerHTML = `<div class="rec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
+    + `<div class="muted" style="font-size:12px;margin-bottom:8px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one.</div>${optHtml}`
+    + `<div class="rec-h" style="margin-top:18px">Stale — no change in 30 days (${stale.length})</div>`
+    + `<div class="muted" style="font-size:12px;margin-bottom:8px">Active accounts we haven't touched in a month. Review and optimize.</div>${staleHtml}`;
+}
+function updateOppCount(){
+  const el=document.getElementById('oppCount'); if(!el) return;
+  const n = staleList().length + optRecs().length;
+  el.textContent = n? String(n) : '';
+}
 function renderBudget(r){
   const el=document.getElementById('ddBudget'); if(!el) return;
   if(CHANNEL!=='google' || !r.hasBudget){ el.innerHTML=''; return; }
@@ -1654,9 +1754,8 @@ function renderBudget(r){
   const factor=(curTotal>0 && need>0) ? need/curTotal : null;
 
   // per-campaign performance (last 30 days) for the second (performance) layer
-  const days=last_n_days(30), perf={}, camps=r.campaigns||{};
-  Object.keys(camps).forEach(name=>{ let spend=0,conv=0; days.forEach(d=>{const s=camps[name][d]; if(s){spend+=s.spend;conv+=s.conv;}}); perf[name]={spend,conv,cpl:conv?spend/conv:0}; });
-  let bs=0,bc=0; Object.keys(perf).forEach(n=>{bs+=perf[n].spend;bc+=perf[n].conv;}); const blendedCPL=bc?bs/bc:0;
+  const {perf, blendedCPL} = campaignPerf(r);
+  const opt = campaignOpt(r);   // budget-shift / pause recommendation, if any
   const cplOf=names=>{ let s=0,c=0; names.forEach(n=>{const p=perf[n]; if(p){s+=p.spend;c+=p.conv;}}); return c?s/c:0; };
   const leadsOf=names=>{ let c=0; names.forEach(n=>{const p=perf[n]; if(p)c+=p.conv;}); return c; };
   const perfTag=cpl=>(cpl&&blendedCPL)?(cpl<=blendedCPL*0.85?'<span class="pos">efficient</span>':cpl>=blendedCPL*1.15?'<span class="neg">costly</span>':'<span class="muted">avg</span>'):'—';
@@ -1713,6 +1812,7 @@ function renderBudget(r){
   let html='<div class="recbox" style="margin:12px 0">'
     + '<div class="rec-h">Campaign budgets · pace, then performance</div>'
     + `<div class="rec-row" style="border-top:0"><div class="rec-t"><b>Franchise:</b> current cap <b>${money(cur)}</b>/day · recommended <b id="recTotal">${applyTot>0?money(applyTot):'—'}</b>/day ${paceState}${over?` <span class="muted">(${over>0?'over':'under'} by ${pctTxt(Math.abs(over))})</span>`:''}</div><div class="rec-a">${chip} ${btn}</div></div>`
+    + (opt?optCallout(opt):'')
     + `<table class="ddtbl" style="margin-top:8px"><thead><tr><th>Campaign(s)</th><th>Current Budget Cap</th><th>Recommended</th><th>Leads 30d</th><th>CPL 30d</th><th>Perf.</th></tr></thead><tbody>${body}</tbody></table>`
     + (gids.length ? '' : '<div class="muted" style="font-size:11px;margin-top:6px">Per-campaign “Current Budget Cap” / “Recommended” appear after the updated Google feed runs (writes the Google_Campaigns tab). Leads/CPL show now.</div>')
     + '<div class="muted" style="font-size:11px;margin-top:6px">Recommended keeps the franchise on its monthly target with the split unchanged. Edit any Recommended box to override — the Apply button queues the new total. Performance flags efficient vs costly campaigns (vs the account’s blended CPL) so you can tilt the split by hand.</div>'
@@ -1789,6 +1889,7 @@ function render(){
   document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
   renderUrgent();
   renderMetaUntagged();
+  updateOppCount();
   renderTotals();
   renderBudgetBanner();
   renderAlerts();
