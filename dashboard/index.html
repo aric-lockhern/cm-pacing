@@ -324,7 +324,7 @@
       <th onclick="sortBy('name')" title="The account (location). Click the name to open its performance detail.">Franchise</th>
       <th onclick="sortBy('type')" title="Lead-gen or e-comm. Click the pill in a row to switch it.">Type</th>
       <th onclick="sortBy('live')" title="Active if at least one campaign is enabled and not ended; otherwise paused.">Status</th>
-      <th onclick="sortBy('spend')" title="Actual ad spend this month to date, across Google and Meta. Platform spend only — no agency fee." id="hSpend">MTD Ad Spend</th>
+      <th onclick="sortBy('spend')" title="Actual ad spend this month to date, across Google and Meta. Platform spend only — no agency fee." id="hSpend">Spend to Date</th>
       <th onclick="sortBy('projected')" title="Where the month actually finishes if the campaigns keep spending their current daily budget: MTD spend + (daily budget × days left).">Projected</th>
       <th onclick="sortBy('target')" title="Ad spend we should place this month = total client budget minus our fee (Google 25%, Meta 20%). Click to set a budget manually." id="hTarget">Ad Spend Target</th>
       <th onclick="sortBy('dailyBudget')" title="Sum of the daily budgets set on this account's enabled Google Ads campaigns. Shared budgets counted once; ended campaigns excluded. Red = below what's needed, amber = above." id="hDaily">Daily Budget</th>
@@ -1764,7 +1764,7 @@ function render(){
   document.querySelectorAll('#channelSeg button').forEach(b=>b.classList.toggle('on', b.dataset.ch===CHANNEL));
   document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===view));
   document.querySelectorAll('#markupSeg button').forEach(b=>b.classList.toggle('on', (b.dataset.mk==='1')===MARKUP));
-  document.getElementById('hSpend').textContent  = isLSA ? (MARKUP?'Billed to date':'Spent to date') : (MARKUP ? 'MTD Billed' : 'MTD Ad Spend');
+  document.getElementById('hSpend').textContent  = isLSA ? (MARKUP?'Billed to date':'Spend to Date') : (MARKUP ? 'MTD Billed' : 'Spend to Date');
   document.getElementById('hTarget').textContent = isLSA ? (MARKUP?'Approved pool':'Ad Spend Pool') : (MARKUP ? 'Budget' : 'Ad Spend Target');
   document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
   renderUrgent();
@@ -1852,7 +1852,7 @@ function renderTotals(){
   const barColor = pace>1.05?'var(--bad)':pace<0.9?'var(--warn)':'var(--good)';
   document.getElementById('totals').innerHTML = `
     <div class="tcell headline">
-      <div class="lab" title="Total spend so far this month vs what should have been spent by now across all active accounts.">${MARKUP?'MTD Billed vs Pace':'MTD Ad Spend vs Pace'}</div>
+      <div class="lab" title="Total spend so far this month vs what should have been spent by now across all active accounts.">${MARKUP?'MTD Billed vs Pace':'Spend to Date vs Pace'}</div>
       <div class="val ${cls}">${money(spend)}</div>
       <div class="sub">expected by today ${money(expected)} · ${pct(pace)}</div>
       <div class="pacebar"><i style="width:${Math.min(pace*100,140)}%;background:${barColor}"></i></div>
@@ -2140,7 +2140,7 @@ function openDD(k){
     <h2>${esc(r.name)}</h2>
     <div class="muted">${r.type} · ${r.live?'active':'paused'}</div>
     <div class="kv">
-      <div class="c"><div class="l">${MARKUP?'MTD Billed':'MTD Ad Spend'}</div><div class="v">${money(r.spend*gfx(r))}</div></div>
+      <div class="c"><div class="l">${MARKUP?'MTD Billed':'Spend to Date'}</div><div class="v">${money(r.spend*gfx(r))}</div></div>
       <div class="c"><div class="l">${MARKUP?'Budget':'Ad Spend Target'}</div><div class="v">${money(r.adTarget*gfx(r))}</div></div>
       <div class="c"><div class="l">Daily Target</div><div class="v">${money(r.dailyTarget*gfx(r))}</div></div>
       <div class="c"><div class="l">Pace</div><div class="v ${r.pace>1.05?'neg':r.pace<0.9?'mid':'pos'}">${pct(r.pace)}</div></div>
