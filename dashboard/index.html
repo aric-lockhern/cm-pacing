@@ -1349,7 +1349,7 @@ function callJsonp(params){
 /* ── load + compute ────────────────────────────────────────────────── */
 async function load(fresh){
   setStatus('loading','loading…');
-  PREFETCHED = false;
+  PREFETCHED = false; CAMP_BULK = null;   // pull fresh campaign data on a reload
   // Apps Script cold-starts: the first request after idle can fail transiently,
   // then works on refresh. Retry a few times with backoff before saying Offline.
   const attempts = 4, waits = [800, 1600, 3000];
@@ -1508,6 +1508,7 @@ function build(){
   (DATA.groups||[]).forEach(r=>labels.add(key(r.Label)));
 
   MODEL = [];
+  PREFETCHED = false;   // fresh rows: campaign data must be re-merged (from cache, no refetch)
   // Pending (queued, not-yet-applied) daily-budget requests — reflected immediately so the
   // team sees their change before Google Ads / the feed catches up. Google channel only.
   const QSTAT = (CHANNEL==='google') ? queueStatus() : {};
@@ -2462,39 +2463,45 @@ function openDD(k){
 // Pull every account's campaign split once, in the background, so clicking a row
 // renders instantly instead of waiting on a per-account fetch.
 let PREFETCHED = false;
-async function prefetchCampaigns(){
-  if(PREFETCHED) return;
-  try{
-    const res = await call({action:'campaignBulk'});
-    if(!res || !res.ok || !res.rows) return;
-    const L = res.labels||[], C = res.camps||[];
-    const byLabel = {};
-    res.rows.forEach(row=>{
-      const [d, li, ci, spend, conv, clicks, rev] = row;
-      const l = key(L[li]||''); const c = C[ci]||'—';
-      if(!l) return;
-      (byLabel[l] = byLabel[l] || {});
-      (byLabel[l][c] = byLabel[l][c] || {});
-      const o = (byLabel[l][c][d] = byLabel[l][c][d] || {spend:0,conv:0,rev:0,clicks:0});
-      o.spend+=spend||0; o.conv+=conv||0; o.clicks+=clicks||0; o.rev+=rev||0;
-    });
-    MODEL.forEach(r=>{
-      const src = byLabel[r.k];
-      if(src){
-        for(const c in src){
-          r.campaigns[c] = r.campaigns[c] || {};
-          for(const d in src[c]){
-            const dst = (r.campaigns[c][d] = r.campaigns[c][d] || {spend:0,conv:0,rev:0,clicks:0});
-            dst.spend+=src[c][d].spend; dst.conv+=src[c][d].conv;
-            dst.clicks+=src[c][d].clicks; dst.rev+=src[c][d].rev;
-          }
+let CAMP_BULK = null;   // cached campaignBulk {labels,camps,rows} — so a rebuilt model re-merges without refetching
+// Merge the cached campaign-daily into the CURRENT model rows (run once per model build).
+function mergeCampBulk_(res){
+  const L = res.labels||[], C = res.camps||[];
+  const byLabel = {};
+  res.rows.forEach(row=>{
+    const [d, li, ci, spend, conv, clicks, rev] = row;
+    const l = key(L[li]||''); const c = C[ci]||'—';
+    if(!l) return;
+    (byLabel[l] = byLabel[l] || {});
+    (byLabel[l][c] = byLabel[l][c] || {});
+    const o = (byLabel[l][c][d] = byLabel[l][c][d] || {spend:0,conv:0,rev:0,clicks:0});
+    o.spend+=spend||0; o.conv+=conv||0; o.clicks+=clicks||0; o.rev+=rev||0;
+  });
+  MODEL.forEach(r=>{
+    const src = byLabel[r.k];
+    if(src){
+      for(const c in src){
+        r.campaigns[c] = r.campaigns[c] || {};
+        for(const d in src[c]){
+          const dst = (r.campaigns[c][d] = r.campaigns[c][d] || {spend:0,conv:0,rev:0,clicks:0});
+          dst.spend+=src[c][d].spend; dst.conv+=src[c][d].conv;
+          dst.clicks+=src[c][d].clicks; dst.rev+=src[c][d].rev;
         }
       }
-      r.gLoaded = true;   // no per-account fetch needed anymore
-    });
-    PREFETCHED = true;
-    if(DD.k){ const r = MODEL.find(x=>x.k===DD.k); if(r){ renderBudget(r); renderSplit(r); } }
-  }catch(e){ /* deep-dives fall back to per-account loading */ }
+    }
+    r.gLoaded = true;   // no per-account fetch needed anymore
+  });
+}
+async function prefetchCampaigns(){
+  if(PREFETCHED) return;                       // this model build already has campaign data merged
+  if(!CAMP_BULK){
+    try{ const res = await call({action:'campaignBulk'}); if(!res || !res.ok || !res.rows) return; CAMP_BULK = res; }
+    catch(e){ return; }                        // deep-dives fall back to per-account loading
+  }
+  mergeCampBulk_(CAMP_BULK);
+  PREFETCHED = true;
+  if(DD.k){ const r = MODEL.find(x=>x.k===DD.k); if(r){ renderBudget(r); renderSplit(r); } }
+  if(OPPS) renderOpps();                        // budget-shift recs now have campaign data
 }
 
 // fetch this franchise's Google campaign daily on demand, merge, re-render split
