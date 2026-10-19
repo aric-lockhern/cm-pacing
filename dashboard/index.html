@@ -65,8 +65,12 @@
   .alerts{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
   .urgentbanner{border:1px solid rgba(239,93,93,.5);background:rgba(239,93,93,.12);border-radius:10px;padding:12px 15px;margin-bottom:14px;box-shadow:0 0 0 1px rgba(239,93,93,.15),0 8px 30px rgba(239,93,93,.1)}
   .urgentbanner .ub-h{font-weight:800;color:var(--bad);font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
-  .urgentbanner .ub-row{font-size:13px;padding:2px 0;color:var(--ink)}
+  .urgentbanner .ub-row{font-size:13px;padding:2px 0;color:var(--ink);display:flex;align-items:center;gap:8px}
   .urgentbanner .ub-row b{color:var(--bad)}
+  .urgentbanner .ub-row .ub-grow{flex:1}
+  .ub-x{color:var(--faint);cursor:pointer;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;font:700 10px/1.6 var(--mono);text-transform:uppercase;letter-spacing:.5px}
+  .ub-x:hover{color:var(--ink);border-color:var(--accent);background:rgba(95,107,255,.14)}
+  .ub-h .ub-x{margin-left:auto}
   .row-nobudget{color:#fff;background:var(--bad);border-color:var(--bad);font-weight:700}
   .budgetbanner{border:1px solid rgba(95,107,255,.45);background:rgba(95,107,255,.1);border-radius:10px;padding:11px 14px;margin-bottom:14px}
   .budgetbanner .bb-h{font-weight:700;color:var(--accent);font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:7px}
@@ -1755,32 +1759,45 @@ function render(){
 // URGENT: anyone SPENDING this month with NO budget on record, across EVERY channel.
 // We should never spend without an approved budget — usually it means a month's budget
 // column wasn't pulled in. Shown loud at the very top until it's resolved.
+// Acknowledging a no-budget hit stores a Dismissals row keyed by month+platform+franchise,
+// so it hides only that account for this calendar month and resurfaces next month if still open.
+function nbKey(platform, k){ return 'nb:'+MONTH+':'+key(platform)+':'+k; }
+function nbDismissed(){
+  const now=new Date(); now.setHours(0,0,0,0);
+  const set={};
+  (DATA&&DATA.dismissals||[]).forEach(r=>{ const lk=key(r.Label); if(lk.slice(0,3)!=='nb:') return;
+    const u=new Date(String(r.Until)); if(!isNaN(u) && u>=now) set[lk]=1; });
+  return set;
+}
 function spendNoBudget(){
   if(!DATA) return [];
-  const out=[];
-  const check=(rows, platform)=>{
+  const out=[], dism=nbDismissed();
+  // Google/Meta carry a monthly budget row; LSA runs on a pooled budget (Month='pool'),
+  // so for LSA "no budget" means no approved pool — not a missing month column.
+  const check=(rows, platform, budgetMonth)=>{
     const bud={};
     (DATA.budgets||[]).forEach(r=>{ if(key(r.Platform)!==key(platform)) return;
-      if(String(r.Month).trim()!==MONTH) return;   // this calendar month's budget
+      if(String(r.Month).trim()!==budgetMonth) return;
       bud[key(r.Label)]=(bud[key(r.Label)]||0)+(Number(r['Total Budget'])||0); });
     const spend={}, disp={};
     (rows||[]).forEach(r=>{ const d=String(r.Date).slice(0,10); if(d.slice(0,7)!==MONTH) return;
       const k=key(r.Label); if(IGNORE_FRANCHISES.has(k)) return;
       spend[k]=(spend[k]||0)+(Number(r.Spend)||0); disp[k]=String(r.Label).trim(); });
-    Object.keys(spend).forEach(k=>{ if(spend[k]>0.5 && !(bud[k]>0)) out.push({label:disp[k]||k, platform, spend:spend[k]}); });
+    Object.keys(spend).forEach(k=>{ if(spend[k]>0.5 && !(bud[k]>0) && !dism[nbKey(platform,k)])
+      out.push({label:disp[k]||k, platform, spend:spend[k], k}); });
   };
-  check(DATA.dailyG,   'Google');
-  check(DATA.dailyLsa, 'LSA');
-  check(DATA.metaDaily,'Meta');
+  check(DATA.dailyG,   'Google', MONTH);
+  check(DATA.dailyLsa, 'LSA',    'pool');
+  check(DATA.metaDaily,'Meta',   MONTH);
   return out.sort((a,b)=> b.spend-a.spend);
 }
 function renderUrgent(){
   const el=document.getElementById('urgentBanner'); if(!el) return;
   const hits=spendNoBudget();
   if(!hits.length){ el.innerHTML=''; return; }
-  const rows=hits.map(h=>`<div class="ub-row"><b>${esc(h.label)}</b> · ${esc(h.platform)} — spending <b>${money(h.spend)}</b> this month with <b>no budget on record</b></div>`).join('');
-  el.innerHTML=`<div class="urgentbanner"><div class="ub-h">⚠ Spending with NO budget — ${hits.length} account${hits.length===1?'':'s'} (${MONTH})</div>${rows}
-    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">We should never spend without an approved budget. Most often this means ${MONTH}'s budget column wasn't pulled in — check <b>Settings ▸ Budgets</b> (columns now auto-extend after redeploy), or confirm the budget in the master sheet.</div></div>`;
+  const rows=hits.map(h=>`<div class="ub-row"><span class="ub-grow"><b>${esc(h.label)}</b> · ${esc(h.platform)} — spending <b>${money(h.spend)}</b> this month with <b>no budget on record</b></span><span class="ub-x" title="Acknowledge for ${MONTH} — hides this account until next month" onclick="dismissNoBudget('${jsStr(h.platform)}','${jsStr(h.k)}')">acknowledge ✕</span></div>`).join('');
+  el.innerHTML=`<div class="urgentbanner"><div class="ub-h">⚠ Spending with NO budget — ${hits.length} account${hits.length===1?'':'s'} (${MONTH})<span class="ub-x" title="Acknowledge all ${hits.length} for ${MONTH}" onclick="dismissAllNoBudget()">acknowledge all ✕</span></div>${rows}
+    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">We should never spend without an approved budget. Most often this means ${MONTH}'s budget column wasn't pulled in — check <b>Settings ▸ Budgets</b> (columns now auto-extend after redeploy), or confirm the budget in the master sheet. <b>LSA</b> runs on a pooled budget, so acknowledge any that are intentional.</div></div>`;
 }
 
 function renderTotals(){
@@ -1971,6 +1988,24 @@ async function dismiss(k, days){
   const until = new Date(); until.setDate(until.getDate()+days);
   try{ await call({action:'setDismiss', label:r.name, until: isoLocal(until)}); }
   catch(e){ /* stays dismissed locally until next full reload */ }
+}
+// Acknowledge a "spending with no budget" hit for the rest of this calendar month.
+async function dismissNoBudget(platform, fk){
+  const [y,m]=MONTH.split('-').map(Number);
+  const until=isoLocal(new Date(y, m, 0));          // last day of MONTH
+  const lbl=nbKey(platform, fk);
+  (DATA.dismissals=DATA.dismissals||[]).push({Label:lbl, Until:until, Updated:''});  // optimistic
+  renderUrgent(); renderRows();
+  try{ await call({action:'setDismiss', label:lbl, until}); }
+  catch(e){ /* stays acknowledged locally until next full reload */ }
+}
+async function dismissAllNoBudget(){
+  const hits=spendNoBudget(); if(!hits.length) return;
+  const [y,m]=MONTH.split('-').map(Number);
+  const until=isoLocal(new Date(y, m, 0));
+  hits.forEach(h=> (DATA.dismissals=DATA.dismissals||[]).push({Label:nbKey(h.platform,h.k), Until:until, Updated:''}));
+  renderUrgent(); renderRows();
+  for(const h of hits){ try{ await call({action:'setDismiss', label:nbKey(h.platform,h.k), until}); }catch(e){} }
 }
 async function dismissAllAlerts(days){
   const hit = MODEL.filter(r=>r.alert && !r.hidden &&
