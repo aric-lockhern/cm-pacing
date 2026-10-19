@@ -258,6 +258,9 @@
   .oppcard .opp-tbl .opp-r-good td{background:rgba(46,196,122,.09)}
   .oppcard .opp-tbl .opp-r-bad td{background:rgba(239,93,93,.09)}
   .opp-ganote{background:rgba(230,171,63,.1);border:1px solid rgba(230,171,63,.4);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px;line-height:1.45;color:var(--ink)}
+  .opp-sec-flex{display:flex;align-items:center;gap:12px}
+  .opp-email-btn{margin-left:auto;font:600 12px var(--font);text-transform:none;letter-spacing:0;padding:6px 13px}
+  .opp-email-btn.done{color:var(--good);border-color:var(--good)}
   .hcount{display:inline-block;margin-left:6px;min-width:16px;padding:0 5px;border-radius:999px;background:var(--accent2);color:#fff;font:700 10px/16px var(--mono);text-align:center;vertical-align:middle}
   .hcount:empty{display:none}
   .qdot{display:inline-block;margin-left:6px;font:700 8.5px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);border:1px solid rgba(242,103,34,.5);border-radius:999px;padding:0 6px;vertical-align:middle;cursor:help}
@@ -520,6 +523,7 @@
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
 const DEFAULT_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';
 const BRAND              = 'Franchise';   // header word before "Pacing"
+const STALE_EMAIL_TO     = 'larry@contentmassive.com,manuel@contentmassive.com';   // recipients of the "stale accounts" email
 // Last-known data-source sheets — baked in so a blank Settings field can never
 // wipe them again (and so the fields always show the right value).
 const DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ4VaWdVmQpkMYdtMLU-PFkAG8Q2PA4/edit?gid=0#gid=0';
@@ -1788,7 +1792,7 @@ function renderOpps(){
     : `<div class="muted" style="font-size:13px">Every active account has a change logged in the last 30 days.</div>`;
   el.innerHTML = `<div class="opp-sec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one. <b>Pause</b> queues the change to Google Ads (hourly apply + confirmation email); <b>Open account</b> lets you fine-tune the budget split.</div>${optHtml}`
-    + `<div class="opp-sec-h" style="margin-top:26px">Stale — no change in 30 days (${stale.length})</div>`
+    + `<div class="opp-sec-h opp-sec-flex" style="margin-top:26px">Stale — no change in 30 days (${stale.length})${stale.length?`<button class="ghost opp-email-btn" onclick="emailStale(this)" title="Email the stale list + optimization suggestions to Larry & Manuel">✉ Email Larry &amp; Manuel</button>`:''}</div>`
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${gaNote}${staleHtml}`;
 }
 // Deploy: queue the pause for the costly campaign, then refresh this view.
@@ -1796,6 +1800,25 @@ async function deployPause(btn, k, campaign, campaignId){
   const r = MODEL.find(x=>x.k===k); if(!r) return;
   await applyCampaignStatus(btn, r.name, campaign, campaignId, 'pause');
   if(OPPS) renderOpps();
+}
+// Email the stale-account list to Larry & Manuel with optimization suggestions.
+async function emailStale(btn){
+  const stale = staleList();
+  if(!stale.length){ alert('No stale accounts right now.'); return; }
+  if(!confirm(`Email ${stale.length} stale account${stale.length===1?'':'s'} to Larry & Manuel with optimization suggestions?`)) return;
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  const payload = {
+    title: `Stale accounts — needs a look (${stale.length})`,
+    subtitle: `Active accounts with no change in the last 30 days (as of ${isoLocal(ASOF)}). Please review and optimize each.`,
+    columns: ['Franchise','Last change'], leftCols: 1,
+    rows: stale.map(s=>[s.r.name, s.last?clTs_(s.last):'never']),
+    note: 'Suggested optimizations for each account: add keywords · pause underperformers · mine search terms (add negatives + harvest new keywords) · refresh ad copy.'
+  };
+  try{
+    const res = await call({action:'emailReport', to: STALE_EMAIL_TO, subject:'Pacing — stale accounts to optimize', payload: JSON.stringify(payload)});
+    if(res && res.ok){ if(btn){ btn.textContent=`Sent ✓`; btn.classList.add('done'); btn.disabled=true; } }
+    else { alert('Failed to send: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
+  }catch(e){ alert('Failed to send: '+e); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
 }
 function updateOppCount(){
   const el=document.getElementById('oppCount'); if(!el) return;
