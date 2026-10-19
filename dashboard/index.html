@@ -523,7 +523,8 @@
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
 const DEFAULT_SECRET     = 'cmp_02RvW0fsAIuSBBTRYmNQupEz';
 const BRAND              = 'Franchise';   // header word before "Pacing"
-const STALE_EMAIL_TO     = 'larry@contentmassive.com,manuel@contentmassive.com';   // recipients of the "stale accounts" email
+const TEAM_EMAIL_TO      = 'larry@contentmassive.com,manuel@contentmassive.com';   // recipients of the Opportunities emails (stale + budget-shift)
+const TEAM_EMAIL_CC      = 'aric@contentmassive.com';                              // cc'd on the Opportunities emails
 // Last-known data-source sheets — baked in so a blank Settings field can never
 // wipe them again (and so the fields always show the right value).
 const DEFAULT_BUDGET_URL = 'https://docs.google.com/spreadsheets/d/1QktivXwEXbI4wZ4VaWdVmQpkMYdtMLU-PFkAG8Q2PA4/edit?gid=0#gid=0';
@@ -1322,6 +1323,7 @@ async function load(fresh){
       render();
       if(EXEC) showExec();                                              // re-render exec with fresh data
       else if(INSIGHTS) renderInsights();                              // re-render insights with fresh data
+      else if(OPPS) showOpportunities();                               // stay on Opportunities, re-render + re-prefetch
       else if(CHANNEL==='google') setTimeout(()=>prefetchCampaigns(), 50);   // Google-only campaign warmup
       return;
     }catch(e){
@@ -1790,7 +1792,7 @@ function renderOpps(){
       + stale.map(s=>`<tr><td><b class="cl-fr" onclick="openDD('${s.r.k}')">${esc(s.r.name)}</b></td><td class="d">${s.last?esc(clTs_(s.last)):'<span class="muted">never</span>'}</td><td><button class="ghost" onclick="openDD('${s.r.k}')">Open →</button></td></tr>`).join('')
       + `</tbody></table>`
     : `<div class="muted" style="font-size:13px">Every active account has a change logged in the last 30 days.</div>`;
-  el.innerHTML = `<div class="opp-sec-h">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}</div>`
+  el.innerHTML = `<div class="opp-sec-h opp-sec-flex">Budget-shift opportunities${CHANNEL==='google'?` (${optRecs().length})`:''}${(CHANNEL==='google'&&optRecs().length)?`<button class="ghost opp-email-btn" onclick="emailOpps(this)" title="Email these budget-shift suggestions to Larry & Manuel">✉ Email Larry &amp; Manuel</button>`:''}</div>`
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">A campaign converting much cheaper than a sibling — move budget in, pause the costly one. <b>Pause</b> queues the change to Google Ads (hourly apply + confirmation email); <b>Open account</b> lets you fine-tune the budget split.</div>${optHtml}`
     + `<div class="opp-sec-h opp-sec-flex" style="margin-top:26px">Stale — no change in 30 days (${stale.length})${stale.length?`<button class="ghost opp-email-btn" onclick="emailStale(this)" title="Email the stale list + optimization suggestions to Larry & Manuel">✉ Email Larry &amp; Manuel</button>`:''}</div>`
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${gaNote}${staleHtml}`;
@@ -1805,7 +1807,7 @@ async function deployPause(btn, k, campaign, campaignId){
 async function emailStale(btn){
   const stale = staleList();
   if(!stale.length){ alert('No stale accounts right now.'); return; }
-  if(!confirm(`Email ${stale.length} stale account${stale.length===1?'':'s'} to Larry & Manuel with optimization suggestions?`)) return;
+  if(!confirm(`Email ${stale.length} stale account${stale.length===1?'':'s'} to Larry & Manuel (cc ${TEAM_EMAIL_CC}) with optimization suggestions?`)) return;
   if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
   const payload = {
     title: `Stale accounts — needs a look (${stale.length})`,
@@ -1815,7 +1817,31 @@ async function emailStale(btn){
     note: 'Suggested optimizations for each account: add keywords · pause underperformers · mine search terms (add negatives + harvest new keywords) · refresh ad copy.'
   };
   try{
-    const res = await call({action:'emailReport', to: STALE_EMAIL_TO, subject:'Pacing — stale accounts to optimize', payload: JSON.stringify(payload)});
+    const res = await call({action:'emailReport', to: TEAM_EMAIL_TO, cc: TEAM_EMAIL_CC, subject:'Pacing — stale accounts to optimize', payload: JSON.stringify(payload)});
+    if(res && res.ok){ if(btn){ btn.textContent=`Sent ✓`; btn.classList.add('done'); btn.disabled=true; } }
+    else { alert('Failed to send: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
+  }catch(e){ alert('Failed to send: '+e); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
+}
+// Email the budget-shift recommendations to Larry & Manuel for review.
+async function emailOpps(btn){
+  const recs = optRecs();
+  if(!recs.length){ alert('No budget-shift opportunities right now.'); return; }
+  if(!confirm(`Email ${recs.length} budget-shift recommendation${recs.length===1?'':'s'} to Larry & Manuel (cc ${TEAM_EMAIL_CC}) for review?`)) return;
+  if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
+  const payload = {
+    title: `Budget-shift opportunities (${recs.length})`,
+    subtitle: `Campaigns converting much cheaper than a sibling (as of ${isoLocal(ASOF)}). Review and shift budget into the efficient one; pause or trim the costly one.`,
+    columns: ['Franchise','Recommendation','Efficient (CPL · leads)','Costly (CPL · leads)'], leftCols: 2,
+    rows: recs.map(({r,o})=>[
+      r.name,
+      o.action==='pause' ? `Shift to ${o.best}, pause ${o.worst}` : `Shift ${o.worst} → ${o.best}`,
+      `${o.best} · ${money(o.bestCPL)} · ${fmtLeads(o.bestLeads)}`,
+      `${o.worst} · ${money(o.worstCPL)} · ${fmtLeads(o.worstLeads)}`
+    ]),
+    note: 'Suggested: move budget into the efficient campaign and pause or trim the costly one. Full detail (per-campaign CPL / leads) is on the tool’s Opportunities page.'
+  };
+  try{
+    const res = await call({action:'emailReport', to: TEAM_EMAIL_TO, cc: TEAM_EMAIL_CC, subject:'Pacing — budget-shift opportunities to review', payload: JSON.stringify(payload)});
     if(res && res.ok){ if(btn){ btn.textContent=`Sent ✓`; btn.classList.add('done'); btn.disabled=true; } }
     else { alert('Failed to send: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
   }catch(e){ alert('Failed to send: '+e); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }

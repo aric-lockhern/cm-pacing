@@ -1097,7 +1097,9 @@ function emailReport_(p) {
     + (d.note ? '<div style="color:' + MAIL_MUTED + ';font-size:12px;margin-top:10px">' + esc(d.note) + '</div>' : '')
     + '</div>';
   var text = (d.title || 'Update') + '\n' + (d.subtitle || '') + '\n\n' + [cols].concat(rows).map(function (r) { return r.join('\t'); }).join('\n');
-  try { MailApp.sendEmail({ to: to, subject: p.subject || d.title || 'Content Massive update', htmlBody: html, body: text }); return { ok: true, to: to }; }
+  var opts = { to: to, subject: p.subject || d.title || 'Content Massive update', htmlBody: html, body: text };
+  if (p.cc) opts.cc = String(p.cc);
+  try { MailApp.sendEmail(opts); return { ok: true, to: to, cc: p.cc || '' }; }
   catch (e) { return { ok: false, error: String(e) }; }
 }
 
