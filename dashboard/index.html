@@ -1798,11 +1798,13 @@ function optRecs(){ return CHANNEL==='google' ? MODEL.filter(r=>r.live&&!r.hidde
 // the installed change-history script predates the editor-change capture, so a per-
 // campaign "0 optimization" can't be trusted and we don't flag (optSignal=false).
 const OPT_TYPES = { keyword:1, negative:1, ad:1, asset:1, bidding:1 };
-// Per-campaign activity over the last 30 days from the REAL Google Ads change feed:
-// count budget changes vs optimization changes for each active campaign, and flag any
-// campaign with ZERO optimization changes. Only changes attributed to THAT campaign
-// count — tool daily-budget edits are franchise-level (no campaign) and don't count.
-function campaignActivity(){
+// Franchise-level optimization activity over the last 30 days from the REAL Google Ads
+// change feed. For each franchise we aggregate changes across its ACTIVE campaigns
+// (paused/ended campaigns are ignored) and flag the franchise when that aggregate has
+// ZERO optimization changes — i.e. its live campaigns got budget pacing but no real
+// work (keywords, negatives, ads, assets, bidding). optSignal is false when the whole
+// feed carries no optimization changes at all (installed script needs updating).
+function franchiseActivity(){
   if(!DATA) return { flagged:[], optSignal:false };
   const cutMs=Date.now()-30*864e5;
   const byCamp={}; let optSignal=false;
@@ -1822,13 +1824,16 @@ function campaignActivity(){
   });
   const flagged=[];
   MODEL.filter(r=>r.live && !r.hidden).forEach(r=>{
-    (gCampBudgets()[r.k]||[]).forEach(c=>{
-      if(c.status!=='active') return;                              // only campaigns actually running
-      const o=byCamp[r.k+'||'+key(c.campaign)] || {budget:0,opt:0,last:''};
-      if(o.opt===0) flagged.push({ r, campaign:c.campaign, budget:o.budget, opt:o.opt, last:o.last });
+    const actives=(gCampBudgets()[r.k]||[]).filter(c=>c.status==='active');   // live campaigns only
+    if(!actives.length) return;                                    // nothing live to optimize
+    let budget=0, opt=0, last='';
+    actives.forEach(c=>{
+      const o=byCamp[r.k+'||'+key(c.campaign)]; if(!o) return;
+      budget+=o.budget; opt+=o.opt; if(o.last>last) last=o.last;
     });
+    if(opt===0) flagged.push({ r, budget, opt, last, camps:actives.length });
   });
-  flagged.sort((a,b)=> a.r.name.localeCompare(b.r.name) || String(a.campaign).localeCompare(String(b.campaign)));
+  flagged.sort((a,b)=> a.r.name.localeCompare(b.r.name));
   return { flagged, optSignal };
 }
 
@@ -1907,27 +1912,27 @@ function renderOpps(){
     + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active accounts we haven't touched in a month. Review and optimize.</div>${gaNote}${staleHtml}`
     + campActivityHtml();
 }
-// Section: active campaigns with no optimization work (no change, or budget-only) in 30d.
+// Section: franchises whose live campaigns got no optimization work in the last 30 days.
 function campActivityHtml(){
   const gaConnected = !!(DATA && (DATA.googleChanges||[]).length);
-  const act = campaignActivity();
+  const act = franchiseActivity();
   if(!gaConnected){
-    return `<div class="opp-sec-h" style="margin-top:26px">Campaigns needing optimization</div>`
-      + `<div class="muted" style="font-size:13px">Connect the Google Ads change feed (install the change-history Ads script) to track optimization work per campaign.</div>`;
+    return `<div class="opp-sec-h" style="margin-top:26px">Accounts needing optimization</div>`
+      + `<div class="muted" style="font-size:13px">Connect the Google Ads change feed (install the change-history Ads script) to track optimization work.</div>`;
   }
-  // Until the feed carries real optimization changes, a per-campaign "0 optimization"
-  // is untrustworthy (Editor edits aren't being captured) — show the fix, not false flags.
+  // Until the feed carries real optimization changes, a "0 optimization" is untrustworthy
+  // (Editor edits aren't being captured) — show the fix, not false flags.
   if(!act.optSignal){
-    return `<div class="opp-sec-h" style="margin-top:26px">Campaigns needing optimization</div>`
-      + `<div class="opp-ganote">⚠ The Google Ads change feed isn't capturing <b>Editor</b> changes yet — it only has budget/status entries, no keyword, ad, negative, asset or bidding edits. Optimization work done in Google Ads Editor won't show here (so campaigns you did optimize would wrongly read "0"), and nothing is flagged until the feed is complete.<br><b>Fix:</b> update the installed <b>google_change_history.js</b> Ads script to the latest version in Google Ads ▸ Tools ▸ Scripts, then let it run.</div>`;
+    return `<div class="opp-sec-h" style="margin-top:26px">Accounts needing optimization</div>`
+      + `<div class="opp-ganote">⚠ The Google Ads change feed isn't capturing <b>Editor</b> changes yet — it only has budget/status entries, no keyword, ad, negative, asset or bidding edits. Optimization work done in Google Ads Editor won't show here (so accounts you did optimize would wrongly read "0"), and nothing is flagged until the feed is complete.<br><b>Fix:</b> update the installed <b>google_change_history.js</b> Ads script to the latest version in Google Ads ▸ Tools ▸ Scripts, then let it run.</div>`;
   }
   const body = act.flagged.length
-    ? `<table class="mvtbl cltbl" style="margin-top:4px"><thead><tr><th>Franchise</th><th>Campaign</th><th title="Budget / daily-budget edits logged against this campaign in the last 30 days">Budget changes</th><th title="Keyword, negative, ad/RSA copy, asset or bidding changes in the last 30 days">Optimization</th><th>Last change</th><th></th></tr></thead><tbody>`
-      + act.flagged.map(f=>`<tr><td><b class="cl-fr" onclick="openDD('${f.r.k}')">${esc(f.r.name)}</b></td><td>${esc(f.campaign)}</td><td>${f.budget?f.budget:'<span class="muted">0</span>'}</td><td><span class="neg">none</span></td><td class="d">${f.last?esc(clTs_(f.last)):'<span class="muted">never</span>'}</td><td><button class="ghost" onclick="openDD('${f.r.k}')">Open →</button></td></tr>`).join('')
+    ? `<table class="mvtbl cltbl" style="margin-top:4px"><thead><tr><th>Franchise</th><th title="Budget / daily-budget edits across this account's live campaigns in the last 30 days">Budget changes</th><th title="Keyword, negative, ad/RSA copy, asset or bidding changes across this account's live campaigns in the last 30 days">Optimization</th><th>Last change</th><th></th></tr></thead><tbody>`
+      + act.flagged.map(f=>`<tr><td><b class="cl-fr" onclick="openDD('${f.r.k}')">${esc(f.r.name)}</b></td><td>${f.budget?f.budget:'<span class="muted">0</span>'}</td><td><span class="neg">none</span></td><td class="d">${f.last?esc(clTs_(f.last)):'<span class="muted">never</span>'}</td><td><button class="ghost" onclick="openDD('${f.r.k}')">Open →</button></td></tr>`).join('')
       + `</tbody></table>`
-    : `<div class="muted" style="font-size:13px">Every active campaign has had optimization work in the last 30 days.</div>`;
-  return `<div class="opp-sec-h opp-sec-flex" style="margin-top:26px">Campaigns needing optimization (${act.flagged.length})${act.flagged.length?`<button class="ghost opp-email-btn" onclick="emailCampActivity(this)" title="Email these campaigns to Larry & Manuel">✉ Email Larry &amp; Manuel</button>`:''}</div>`
-    + `<div class="muted" style="font-size:13px;margin-bottom:10px">Active campaigns with <b>no optimization</b> (keywords, negatives, ad copy, assets or bidding) in the last 30 days — the <b>Budget changes</b> column shows they're getting pacing tweaks but nothing else. Tool daily-budget edits are franchise-level, so they don't count here.</div>${body}`;
+    : `<div class="muted" style="font-size:13px">Every active account has had optimization work in the last 30 days.</div>`;
+  return `<div class="opp-sec-h opp-sec-flex" style="margin-top:26px">Accounts needing optimization (${act.flagged.length})${act.flagged.length?`<button class="ghost opp-email-btn" onclick="emailCampActivity(this)" title="Email these accounts to Larry & Manuel">✉ Email Larry &amp; Manuel</button>`:''}</div>`
+    + `<div class="muted" style="font-size:13px;margin-bottom:10px">Accounts whose live campaigns had <b>no optimization</b> (keywords, negatives, ad copy, assets or bidding) in the last 30 days — the <b>Budget changes</b> column shows they're getting pacing tweaks but nothing else. Tool daily-budget edits are franchise-level, so they don't count here.</div>${body}`;
 }
 // Deploy: queue the pause for the costly campaign, then refresh this view.
 async function deployPause(btn, k, campaign, campaignId){
@@ -1954,17 +1959,17 @@ async function emailStale(btn){
     else { alert('Failed to send: '+((res&&res.error)||'?')); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
   }catch(e){ alert('Failed to send: '+e); if(btn){ btn.disabled=false; btn.textContent='✉ Email Larry & Manuel'; } }
 }
-// Email the "campaigns needing optimization" list (no change / budget-only) to the team.
+// Email the "accounts needing optimization" list to the team.
 async function emailCampActivity(btn){
-  const act = campaignActivity();
-  if(!act.flagged.length){ alert('No flagged campaigns right now.'); return; }
-  if(!confirm(`Email ${act.flagged.length} campaign${act.flagged.length===1?'':'s'} needing optimization to Larry & Manuel (cc ${TEAM_EMAIL_CC})?`)) return;
+  const act = franchiseActivity();
+  if(!act.flagged.length){ alert('No flagged accounts right now.'); return; }
+  if(!confirm(`Email ${act.flagged.length} account${act.flagged.length===1?'':'s'} needing optimization to Larry & Manuel (cc ${TEAM_EMAIL_CC})?`)) return;
   if(btn){ btn.disabled=true; btn.textContent='Sending…'; }
   const payload = {
-    title: `Campaigns needing optimization (${act.flagged.length})`,
-    subtitle: `Active campaigns with no optimization (keywords, negatives, ad copy, assets or bidding) in the last 30 days. "Budget changes" shows they're getting pacing tweaks but nothing else. As of ${isoLocal(ASOF)}.`,
-    columns: ['Franchise','Campaign','Budget changes','Optimization','Last change'], leftCols: 2,
-    rows: act.flagged.map(f=>[f.r.name, String(f.campaign), String(f.budget||0), 'none', f.last?clTs_(f.last):'never']),
+    title: `Accounts needing optimization (${act.flagged.length})`,
+    subtitle: `Active accounts whose live campaigns had no optimization (keywords, negatives, ad copy, assets or bidding) in the last 30 days. "Budget changes" shows they're getting pacing tweaks but nothing else. As of ${isoLocal(ASOF)}.`,
+    columns: ['Franchise','Budget changes','Optimization','Last change'], leftCols: 1,
+    rows: act.flagged.map(f=>[f.r.name, String(f.budget||0), 'none', f.last?clTs_(f.last):'never']),
     note: 'Each of these needs real optimization. Add keywords · mine search terms for negatives + new keywords · refresh ad copy / RSAs · review assets · check bidding.'
   };
   try{
