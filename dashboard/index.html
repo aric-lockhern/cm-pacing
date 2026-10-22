@@ -367,6 +367,7 @@ try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('p
       <button data-mk="1" onclick="setMarkup(true)">With markup</button>
     </div>
     <div class="grow"></div>
+    <span class="muted" id="dataFresh" style="margin-right:12px"></span>
     <span class="muted" id="monthLabel"></span>
   </div>
 
@@ -377,6 +378,7 @@ try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('p
       <th onclick="sortBy('type')" title="Lead-gen or e-comm. Click the pill in a row to switch it.">Type</th>
       <th onclick="sortBy('live')" title="Active if at least one campaign is enabled and not ended; otherwise paused.">Status</th>
       <th onclick="sortBy('spend')" title="Actual ad spend this month to date, across Google and Meta. Platform spend only — no agency fee." id="hSpend">Spend to Date</th>
+      <th onclick="sortBy('yesterday')" title="Spend on the last COMPLETE day. The quickest check that the daily budget is right — compare it against Daily Budget. (Today is in progress, so its partial spend isn't counted until the feed posts it as a whole day.)">Yesterday</th>
       <th onclick="sortBy('projected')" title="Where the month actually finishes if the campaigns keep spending their current daily budget: MTD spend + (daily budget × days left).">Projected</th>
       <th onclick="sortBy('target')" title="Ad spend we should place this month = total client budget minus our fee (Google 25%, Meta 20%). Click to set a budget manually." id="hTarget">Ad Spend Target</th>
       <th onclick="sortBy('dailyBudget')" title="Sum of the daily budgets set on this account's enabled Google Ads campaigns. Shared budgets counted once; ended campaigns excluded. Red = below what's needed, amber = above." id="hDaily">Daily Budget</th>
@@ -1559,6 +1561,13 @@ function build(){
       pace = expectedToDate>0 ? spend/expectedToDate : (spend>0?Infinity:0);
     }
 
+    // spend on the last COMPLETE day — the best read on whether the daily budget is
+    // right. MTD only counts whole days, so it won't move until the feed posts a new
+    // day; "yesterday" is that latest whole day for a same-day sanity check.
+    let ydayDate='', yesterday=0;
+    for(const d in series){ if(d<=asofIso && d>ydayDate) ydayDate=d; }
+    if(ydayDate) yesterday = series[ydayDate].spend;
+
     const cpa = conv>0 ? spend/conv : 0;
     const roas = (type==='e-comm' && spend>0) ? rev/spend : 0;
     const onTarget = adTarget>0 ? projected/adTarget : 0;
@@ -1568,7 +1577,7 @@ function build(){
     const corrected = correctionBadge(series, pace);
 
     MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
-      projected, onTarget, pace, delta,
+      projected, onTarget, pace, delta, yesterday, yesterdayDate:ydayDate,
       conv, cpa, rev, roas, type, hidden, live, dailyBudget:effDaily, dailyApplied:appliedDaily, dailyPending:pendDaily, reqDaily,
       hasBudget:gross>0, dailyTarget, series, alert, corrected, moved,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
@@ -1579,6 +1588,16 @@ function build(){
 function feedName(CH, k){
   const hit = (CH.feedRows||[]).find(r=>key(r.Label)===k);
   return hit ? String(hit.Label).trim() : null;
+}
+// When did the current channel's feed last post? (the "Updated" stamp the Ads
+// script / Meta sync writes with each run.) Spend counts COMPLETE days only, so the
+// numbers only move when the feed posts a new day — this shows the team how fresh
+// that is, which is why Refresh alone doesn't change the figures mid-day.
+function feedUpdatedAt(){
+  const rows = (channelCfg().feedRows)||[];
+  let max=0;
+  rows.forEach(r=>{ const t=new Date(String(r.Updated)).getTime(); if(!isNaN(t) && t>max) max=t; });
+  return max ? new Date(max) : null;
 }
 
 /* ── alerting: month-over-month on Leads & CPL, same elapsed days ─────
@@ -1733,14 +1752,20 @@ const OPT = { minLeads:3, minFranchiseSpend:150, minWorstSpend:50, gap:1.75, pau
 function campaignOpt(r){
   if(!r || r.hidden) return null;
   const {perf}=campaignPerf(r);
+  // current status per campaign (so we don't recommend pausing something already paused /
+  // queued to pause, or shifting budget into a paused campaign). Default active if unknown.
+  const stat={}; (gCampBudgets()[r.k]||[]).forEach(c=>{ stat[String(c.campaign)]=c.status; });
+  const cq=campaignQueueStatus();
+  const pauseQueued=n=>{ const q=cq.byName[(r.name+'||'+n).toLowerCase()]; return !!(q && q.action==='pause' && (q.status==='pending'||q.status==='paused')); };
+  const isActive=n=> (stat[n]||'active')==='active' && !pauseQueued(n);
   const names=Object.keys(perf).filter(n=>perf[n].spend>0 || perf[n].conv>0);
   if(names.length<2) return null;
   if(names.reduce((a,n)=>a+perf[n].spend,0) < OPT.minFranchiseSpend) return null;   // skip tiny accounts
-  const earners=names.filter(n=>perf[n].conv>=OPT.minLeads);                         // proven, cheap campaign to grow
+  const earners=names.filter(n=>perf[n].conv>=OPT.minLeads && isActive(n));          // grow a proven, ACTIVE campaign
   if(!earners.length) return null;
   const best=earners.reduce((a,n)=> perf[n].cpl<perf[a].cpl?n:a);
   const bestCPL=perf[best].cpl; if(!bestCPL) return null;
-  const cands=names.filter(n=> n!==best && perf[n].spend>=OPT.minWorstSpend && perf[n].cpl>0);
+  const cands=names.filter(n=> n!==best && isActive(n) && perf[n].spend>=OPT.minWorstSpend && perf[n].cpl>0);   // only pause an ACTIVE one
   if(!cands.length) return null;
   const worst=cands.reduce((a,n)=> perf[n].cpl>perf[a].cpl?n:a);
   const worstCPL=perf[worst].cpl;
@@ -2050,6 +2075,15 @@ function render(){
   document.getElementById('hSpend').textContent  = isLSA ? (MARKUP?'Billed to date':'Spend to Date') : (MARKUP ? 'MTD Billed' : 'Spend to Date');
   document.getElementById('hTarget').textContent = isLSA ? (MARKUP?'Approved pool':'Ad Spend Pool') : (MARKUP ? 'Budget' : 'Ad Spend Target');
   document.getElementById('hDaily').textContent  = MARKUP ? 'Daily Billed' : 'Daily Budget';
+  const fr = document.getElementById('dataFresh');
+  if(fr){
+    const chName = isLSA ? 'LSA' : CHANNEL==='meta' ? 'Meta' : 'Google';
+    const up = feedUpdatedAt();
+    fr.textContent = up
+      ? `${chName} feed updated ${up.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`
+      : `${chName} feed: no data yet`;
+    fr.title = `Spend counts complete days only (through ${ASOF.toLocaleDateString(undefined,{month:'short',day:'numeric'})}), so today's partial spend isn't included and the numbers only move once the ${chName} feed posts a new day. Refresh pulls the latest feed — it can't make the feed itself newer than its last run.`;
+  }
   renderUrgent();
   renderMetaUntagged();
   updateOppCount();
@@ -2260,6 +2294,7 @@ function renderRows(){
       <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
       <td>${r.live?'<span class="pos">active</span>':'<span class="muted">paused</span>'}</td>
       <td>${money(r.spend*F)}</td>
+      <td title="${r.yesterdayDate?'Spend on '+r.yesterdayDate+' (last complete day)':''}">${r.yesterday?money(r.yesterday*F):'<span class="muted">—</span>'}</td>
       <td class="muted">${r.hasBudget?money(r.projected*F):'—'}</td>
       <td class="budcell" onclick="editBudget('${r.k}')">${r.hasBudget?money(r.adTarget*F):'<span class=muted>set</span>'}</td>
       <td class="${budCls}">${r.dailyBudget?money(r.dailyBudget*F):'<span class="muted">—</span>'}${r.dailyPending!=null?`<span class="qdot" title="Requested ${money(r.dailyPending*F)}/day — queued. Google Ads applies it on the next hourly run${r.dailyApplied?` (was ${money(r.dailyApplied*F)})`:''}.">queued</span>`:''}</td>
