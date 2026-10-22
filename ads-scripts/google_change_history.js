@@ -6,11 +6,14 @@
  * changes made DIRECTLY in Google Ads (by anyone, any tool) — not just changes
  * made through the pacing tool.
  *
- * "Key changes" only, to keep the log readable:
- *   • Campaign BUDGET amount changes          (change_resource_type CAMPAIGN_BUDGET)
- *   • Campaign STATUS changes (pause/enable)  (change_resource_type CAMPAIGN)
+ * Captures the changes the team actually makes, including in Google Ads Editor:
+ *   • Campaign BUDGET amount changes          (CAMPAIGN_BUDGET)
+ *   • Campaign STATUS changes (pause/enable)  (CAMPAIGN)
  *   • Campaign BIDDING changes (strategy / target CPA / target ROAS)
- * Everything else (ads, keywords, targeting, ad groups) is skipped.
+ *   • KEYWORDS added / removed / paused        (AD_GROUP_CRITERION)
+ *   • NEGATIVE keywords added / removed        (AD_GROUP_CRITERION, CAMPAIGN_CRITERION)
+ *   • ADS / RSA copy added / removed / edited  (AD_GROUP_AD)
+ *   • ASSET (sitelink / callout / image / pmax) copy edits   (ASSET)
  *
  * Rolls each change up to a franchise using the same campaign location label the
  * pacing feed uses, and records WHO made it (user email) and WHERE from (web UI /
@@ -82,12 +85,15 @@ function main() {
     // change_event REQUIRES a change_date_time window (≤30 days) and a LIMIT (≤10000).
     var q =
       "SELECT change_event.change_date_time, change_event.change_resource_type, " +
-      "change_event.changed_fields, change_event.client_type, change_event.user_email, " +
-      "change_event.campaign, change_event.old_resource, change_event.new_resource " +
+      "change_event.changed_fields, change_event.resource_change_operation, " +
+      "change_event.client_type, change_event.user_email, " +
+      "change_event.campaign, change_event.ad_group, " +
+      "change_event.old_resource, change_event.new_resource " +
       "FROM change_event " +
       "WHERE change_event.change_date_time >= '" + startDt + "' " +
       "AND change_event.change_date_time <= '" + endDt + "' " +
-      "AND change_event.change_resource_type IN ('CAMPAIGN','CAMPAIGN_BUDGET') " +
+      "AND change_event.change_resource_type IN " +
+      "('CAMPAIGN','CAMPAIGN_BUDGET','AD_GROUP_AD','AD_GROUP_CRITERION','CAMPAIGN_CRITERION','ASSET') " +
       "ORDER BY change_event.change_date_time DESC " +
       "LIMIT 10000";
 
@@ -99,8 +105,9 @@ function main() {
       var ce = it.next().changeEvent || {};
       var fields = String(ce.changedFields || '');
       var type = String(ce.changeResourceType || '');
-      var desc = describe_(type, fields, ce.oldResource || {}, ce.newResource || {});
-      if (!desc) continue;                                   // not a key change (status/budget/bidding)
+      var op = String(ce.resourceChangeOperation || '');
+      var desc = describe_(type, fields, ce.oldResource || {}, ce.newResource || {}, op);
+      if (!desc) continue;                                   // not a change we surface
 
       var cid = idFromResource_(ce.campaign);
       var labs = cid && campLabels[cid];
@@ -122,9 +129,10 @@ function main() {
   Logger.log('Accounts matched "' + ACCOUNT_LABEL + '": ' + acctCount + ' | key changes written: ' + out.length);
 }
 
-/* Turn a change_event into a {kind, text} for budget / status / bidding changes,
-   or null for anything else. old/new_resource carry only the changed fields. */
-function describe_(type, fields, oldR, newR) {
+/* Turn a change_event into a {kind, text}, or null for anything we don't surface.
+   old/new_resource carry ONLY the changed fields (except on add/remove, where the
+   whole resource is present), so text falls back gracefully when a field is absent. */
+function describe_(type, fields, oldR, newR, operation) {
   if (type === 'CAMPAIGN_BUDGET' && fields.indexOf('amount_micros') >= 0) {
     var ob = (oldR.campaignBudget || {}).amountMicros, nb = (newR.campaignBudget || {}).amountMicros;
     return { kind: 'Budget', text: 'daily budget ' + micros_(ob) + ' → ' + micros_(nb) };
@@ -146,8 +154,77 @@ function describe_(type, fields, oldR, newR) {
       var orr = pickTarget_(oc, 'targetRoas', 'targetRoas'), nrr = pickTarget_(nc, 'targetRoas', 'targetRoas');
       return { kind: 'Bidding', text: 'target ROAS ' + roas_(orr) + ' → ' + roas_(nrr) };
     }
+    return null;
   }
+
+  // Keywords & ad-group negatives (added in Google Ads Editor or the UI)
+  if (type === 'AD_GROUP_CRITERION') {
+    var oac = oldR.adGroupCriterion || {}, nac = newR.adGroupCriterion || {};
+    var kw = nac.keyword || oac.keyword || null;
+    var isNeg = nac.negative === true || oac.negative === true;
+    var kwText = kw && kw.text ? '"' + kw.text + '"' + matchTag_(kw.matchType) : '';
+    if (isNeg) return { kind: 'Negative', text: op_(operation) + ' ad-group negative' + (kwText ? ' ' + kwText : '') };
+    // a keyword status change (paused/enabled) — report even without the text
+    if (fields.indexOf('status') >= 0 && (nac.status || oac.status)) {
+      return { kind: 'Keyword', text: 'keyword' + (kwText ? ' ' + kwText : '') + ' ' + (oac.status || '?') + ' → ' + (nac.status || '?') };
+    }
+    // add / remove with a keyword payload → a real keyword change (audiences,
+    // placements etc. carry no keyword text, so they fall through and are skipped)
+    if (kw) return { kind: 'Keyword', text: op_(operation) + ' keyword' + (kwText ? ' ' + kwText : '') };
+    return null;
+  }
+
+  // Campaign-level criteria — we surface negative keywords; skip locations/languages noise
+  if (type === 'CAMPAIGN_CRITERION') {
+    var occ = oldR.campaignCriterion || {}, ncc = newR.campaignCriterion || {};
+    var ckw = ncc.keyword || occ.keyword || null;
+    var cNeg = ncc.negative === true || occ.negative === true;
+    if (ckw || cNeg) {
+      var ct = ckw && ckw.text ? '"' + ckw.text + '"' + matchTag_(ckw.matchType) : '';
+      return { kind: 'Negative', text: op_(operation) + ' campaign negative' + (ct ? ' ' + ct : '') };
+    }
+    return null;
+  }
+
+  // Ads — RSA/ad copy edits, pauses, adds/removes
+  if (type === 'AD_GROUP_AD') {
+    var oaa = oldR.adGroupAd || {}, naa = newR.adGroupAd || {};
+    if (fields.indexOf('status') >= 0 && (naa.status || oaa.status)) {
+      return { kind: 'Ad', text: 'ad' + adTag_(naa.ad || oaa.ad) + ' ' + (oaa.status || '?') + ' → ' + (naa.status || '?') };
+    }
+    var copyEdit = fields.indexOf('responsive_search_ad') >= 0 || fields.indexOf('ad.') >= 0 ||
+                   fields.indexOf('headlines') >= 0 || fields.indexOf('descriptions') >= 0 ||
+                   fields.indexOf('final_urls') >= 0;
+    if (copyEdit) return { kind: 'Ad', text: op_(operation) + ' ad copy' + adTag_(naa.ad || oaa.ad) };
+    return { kind: 'Ad', text: op_(operation) + ' ad' + adTag_(naa.ad || oaa.ad) };
+  }
+
+  // Assets — sitelink / callout / image / PMax text asset copy edits
+  if (type === 'ASSET') {
+    var oas = oldR.asset || {}, nas = newR.asset || {};
+    var txt = (nas.textAsset && nas.textAsset.text) || (oas.textAsset && oas.textAsset.text) || nas.name || oas.name || '';
+    return { kind: 'Asset', text: op_(operation) + ' asset' + (txt ? ' "' + txt + '"' : '') };
+  }
+
   return null;
+}
+
+/* CREATE / UPDATE / REMOVE → a plain verb for the change text. */
+function op_(o) {
+  o = String(o || '');
+  if (o.indexOf('CREATE') >= 0) return 'added';
+  if (o.indexOf('REMOVE') >= 0) return 'removed';
+  if (o.indexOf('UPDATE') >= 0) return 'edited';
+  return 'changed';
+}
+function matchTag_(mt) { mt = String(mt || ''); return mt && mt !== 'UNSPECIFIED' && mt !== 'UNKNOWN' ? ' [' + mt + ']' : ''; }
+/* Pull the first headline off an RSA so an ad edit reads with some context. */
+function adTag_(ad) {
+  if (!ad) return '';
+  var rsa = ad.responsiveSearchAd;
+  if (rsa && rsa.headlines && rsa.headlines.length && rsa.headlines[0].text) return ' "' + rsa.headlines[0].text + '…"';
+  if (ad.name) return ' "' + ad.name + '"';
+  return '';
 }
 
 function pickTarget_(c, a, b) {
