@@ -75,19 +75,28 @@ function main() {
       }
     } catch (e) { Logger.log('  [' + acctName + '] campaign_label query failed: ' + e); }
 
-    // campaign id -> name (for display)
-    var campName = {};
+    // campaign id -> name (for display), and budget id -> campaigns that use it.
+    // A shared budget change_event carries NO campaign, so we map the budget back to
+    // the campaigns it funds — otherwise budget changes show with a blank campaign.
+    var campName = {}, budgetCamps = {};
     try {
-      var nit = AdsApp.search("SELECT campaign.id, campaign.name FROM campaign WHERE campaign.status != 'REMOVED'");
-      while (nit.hasNext()) { var nr = nit.next(); campName[String(nr.campaign.id)] = nr.campaign.name || ''; }
-    } catch (e) { /* names are best-effort */ }
+      var nit = AdsApp.search("SELECT campaign.id, campaign.name, campaign_budget.id " +
+                              "FROM campaign WHERE campaign.status != 'REMOVED'");
+      while (nit.hasNext()) {
+        var nr = nit.next();
+        var ciStr = String(nr.campaign.id);
+        campName[ciStr] = nr.campaign.name || '';
+        var bId = nr.campaignBudget && nr.campaignBudget.id != null ? String(nr.campaignBudget.id) : '';
+        if (bId) (budgetCamps[bId] = budgetCamps[bId] || []).push(ciStr);
+      }
+    } catch (e) { /* names/budget map are best-effort */ }
 
     // change_event REQUIRES a change_date_time window (≤30 days) and a LIMIT (≤10000).
     var q =
       "SELECT change_event.change_date_time, change_event.change_resource_type, " +
       "change_event.changed_fields, change_event.resource_change_operation, " +
       "change_event.client_type, change_event.user_email, " +
-      "change_event.campaign, change_event.ad_group, " +
+      "change_event.campaign, change_event.ad_group, change_event.change_resource_name, " +
       "change_event.old_resource, change_event.new_resource " +
       "FROM change_event " +
       "WHERE change_event.change_date_time >= '" + startDt + "' " +
@@ -110,9 +119,21 @@ function main() {
       if (!desc) continue;                                   // not a change we surface
 
       var cid = idFromResource_(ce.campaign);
+      var cname = (cid && campName[cid]) || '';
+
+      // A shared/standalone budget change carries no campaign — attribute it to the
+      // campaign(s) funded by that budget so it shows against them, not blank.
+      if (type === 'CAMPAIGN_BUDGET') {
+        var bid = (String(ce.changeResourceName || '').match(/[Bb]udgets\/(\d+)/) || [])[1];
+        var funded = (bid && budgetCamps[bid]) || [];
+        if (funded.length) {
+          if (!cid) cid = funded[0];                         // roll up to the first funded campaign's label
+          cname = funded.map(function (id) { return campName[id] || ''; }).filter(String).join(', ');
+        }
+      }
+
       var labs = cid && campLabels[cid];
       var fr = (labs && labs.length) ? labs[0] : acctName;   // one row per change; first label wins
-      var cname = (cid && campName[cid]) || '';
       var when = String(ce.changeDateTime || '').replace('T', ' ').substring(0, 19);
 
       out.push([ when, fr, cname, desc.kind, desc.text, String(ce.userEmail || ''), clientLabel_(ce.clientType) ]);
