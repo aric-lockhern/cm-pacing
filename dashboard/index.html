@@ -2193,6 +2193,16 @@ function nbDismissed(){
     const u=new Date(String(r.Until)); if(!isNaN(u) && u>=now) set[lk]=1; });
   return set;
 }
+// Untagged Meta campaigns the team marked "not ours" — permanently hidden from the
+// untagged-spend banner (keyed by campaign name, stored in Dismissals with a far-future Until).
+function muKey(campaign){ return 'mu:'+key(campaign); }
+function metaUntaggedDismissed(){
+  const now=new Date(); now.setHours(0,0,0,0);
+  const set={};
+  (DATA&&DATA.dismissals||[]).forEach(r=>{ const lk=key(r.Label); if(lk.slice(0,3)!=='mu:') return;
+    const u=new Date(String(r.Until)); if(!isNaN(u) && u>=now) set[lk]=1; });
+  return set;
+}
 function spendNoBudget(){
   if(!DATA) return [];
   const out=[], dism=nbDismissed();
@@ -2229,13 +2239,14 @@ function renderUrgent(){
 // visible — the fix is to tag the campaign in Meta to match the franchise's master name.
 function renderMetaUntagged(){
   const el=document.getElementById('metaUntaggedBanner'); if(!el) return;
-  const hits=(CHANNEL==='meta' && DATA) ? (DATA.metaUntagged||[]).filter(r=>Number(r.Spend)>0.5) : [];
+  const dism=metaUntaggedDismissed();
+  const hits=(CHANNEL==='meta' && DATA) ? (DATA.metaUntagged||[]).filter(r=>Number(r.Spend)>0.5 && !dism[muKey(r.Campaign)]) : [];
   if(!hits.length){ el.innerHTML=''; return; }
   hits.sort((a,b)=>Number(b.Spend)-Number(a.Spend));
   const total=hits.reduce((a,r)=>a+Number(r.Spend||0),0);
-  const rows=hits.map(h=>`<div class="ub-row"><span class="ub-grow"><b>${esc(h.Campaign)}</b>${h.Account?` · <span class="muted">${esc(h.Account)}</span>`:''} — spent <b>${money(Number(h.Spend))}</b> this month</span></div>`).join('');
+  const rows=hits.map(h=>`<div class="ub-row"><span class="ub-grow"><b>${esc(h.Campaign)}</b>${h.Account?` · <span class="muted">${esc(h.Account)}</span>`:''} — spent <b>${money(Number(h.Spend))}</b> this month</span><span class="ub-x" title="Not a campaign we manage — hide it from this list" onclick="dismissMetaUntagged('${jsStr(h.Campaign)}')">not ours ✕</span></div>`).join('');
   el.innerHTML=`<div class="warnbanner"><div class="wb-h">⚠ Untagged Meta spend — ${hits.length} campaign${hits.length===1?'':'s'}, ${money(total)} not in any franchise (${MONTH})</div>${rows}
-    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">These campaigns have no <b>Campaign tag</b> in Meta, so their spend isn't counted toward any franchise here. Add the tag in Meta (match the franchise's master name exactly), then <b>Settings ▸ Meta ▸ Sync</b>.</div></div>`;
+    <div class="muted" style="font-size:12px;margin-top:6px;color:var(--ink)">These campaigns have no <b>Campaign tag</b> in Meta, so their spend isn't counted toward any franchise here. Add the tag in Meta (match the franchise's master name exactly), then <b>Settings ▸ Meta ▸ Sync</b> — or mark any that aren't ours <b>“not ours”</b> to hide them.</div></div>`;
 }
 
 function renderTotals(){
@@ -2437,6 +2448,15 @@ async function dismissNoBudget(platform, fk){
   renderUrgent(); renderRows();
   try{ await call({action:'setDismiss', label:lbl, until}); }
   catch(e){ /* stays acknowledged locally until next full reload */ }
+}
+// Mark an untagged Meta campaign "not ours" — hides it from the banner for good.
+async function dismissMetaUntagged(campaign){
+  const until=isoLocal(new Date(2099,0,1));          // effectively permanent
+  const lbl=muKey(campaign);
+  (DATA.dismissals=DATA.dismissals||[]).push({Label:lbl, Until:until, Updated:''});  // optimistic
+  renderMetaUntagged();
+  try{ await call({action:'setDismiss', label:lbl, until}); }
+  catch(e){ /* stays hidden locally until next full reload */ }
 }
 async function dismissAllNoBudget(){
   const hits=spendNoBudget(); if(!hits.length) return;
