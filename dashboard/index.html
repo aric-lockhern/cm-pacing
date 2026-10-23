@@ -1509,6 +1509,17 @@ function build(){
   Object.keys(dailyByLabel).forEach(k=>labels.add(k));
   (DATA.groups||[]).forEach(r=>labels.add(key(r.Label)));
 
+  // Carryover: accounts spending a budget booked in an earlier month (already billed).
+  // Map franchise → ad spend to pace to THIS month. Applied only when there's no booked
+  // budget this month, and never added to billings / our fee (it isn't billed again).
+  const carryoverMap = {};
+  (DATA.carryover||[]).forEach(r=>{
+    if(key(r.Platform)!==key(CH.platform)) return;
+    if(String(r.Month).trim()!==CH.budgetMonth) return;
+    const amt=Number(r.Amount)||0; if(amt>0) carryoverMap[key(r.Label)]=amt;
+  });
+  Object.keys(carryoverMap).forEach(k=>labels.add(k));
+
   MODEL = [];
   PREFETCHED = false;   // fresh rows: campaign data must be re-merged (from cache, no refetch)
   // Pending (queued, not-yet-applied) daily-budget requests — reflected immediately so the
@@ -1521,8 +1532,11 @@ function build(){
     const series = dailyByLabel[k] || {};
     const moved = moveAdj[k] || 0;                       // net channel reallocation for this franchise
     const gross = Math.max(0, (bud[k] || 0) + moved);    // billed budget adjusted by moves (sheet untouched)
-    const adTarget = gross * fee1;
-    const feeAmt = gross - adTarget;
+    // carryover applies ONLY when there's no booked budget this month; it sets the ad
+    // spend target directly (no fee) and adds nothing to billings.
+    const carryover = gross>0 ? 0 : (carryoverMap[k] || 0);
+    const adTarget = carryover>0 ? carryover : gross * fee1;
+    const feeAmt = carryover>0 ? 0 : gross - adTarget;
     const hasFeed = feed.hasOwnProperty(k);
     const f = feed[k] || {status:'', dailyBudget:0};
     // A queued budget change overrides the displayed daily budget until the feed re-runs.
@@ -1579,7 +1593,7 @@ function build(){
     MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
       projected, onTarget, pace, delta, yesterday, yesterdayDate:ydayDate,
       conv, cpa, rev, roas, type, hidden, live, dailyBudget:effDaily, dailyApplied:appliedDaily, dailyPending:pendDaily, reqDaily,
-      hasBudget:gross>0, dailyTarget, series, alert, corrected, moved,
+      hasBudget: carryover>0 || gross>0, carryover, dailyTarget, series, alert, corrected, moved,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
   });
   MODEL.forEach(r=>{ r.rec = budgetRec(r); r.opp = budgetOpp(r); });   // Google budget recs / opportunities
@@ -2209,15 +2223,18 @@ function spendNoBudget(){
   // Google/Meta carry a monthly budget row; LSA runs on a pooled budget (Month='pool'),
   // so for LSA "no budget" means no approved pool — not a missing month column.
   const check=(rows, platform, budgetMonth)=>{
-    const bud={};
+    const bud={}, carry={};
     (DATA.budgets||[]).forEach(r=>{ if(key(r.Platform)!==key(platform)) return;
       if(String(r.Month).trim()!==budgetMonth) return;
       bud[key(r.Label)]=(bud[key(r.Label)]||0)+(Number(r['Total Budget'])||0); });
+    (DATA.carryover||[]).forEach(r=>{ if(key(r.Platform)!==key(platform)) return;
+      if(String(r.Month).trim()!==budgetMonth) return;
+      if((Number(r.Amount)||0)>0) carry[key(r.Label)]=1; });   // carryover counts as covered
     const spend={}, disp={};
     (rows||[]).forEach(r=>{ const d=String(r.Date).slice(0,10); if(d.slice(0,7)!==MONTH) return;
       const k=key(r.Label); if(IGNORE_FRANCHISES.has(k)) return;
       spend[k]=(spend[k]||0)+(Number(r.Spend)||0); disp[k]=String(r.Label).trim(); });
-    Object.keys(spend).forEach(k=>{ if(spend[k]>0.5 && !(bud[k]>0) && !dism[nbKey(platform,k)])
+    Object.keys(spend).forEach(k=>{ if(spend[k]>0.5 && !(bud[k]>0) && !carry[k] && !dism[nbKey(platform,k)])
       out.push({label:disp[k]||k, platform, spend:spend[k], k}); });
   };
   check(DATA.dailyG,   'Google', MONTH);
@@ -2385,9 +2402,11 @@ function renderRows(){
       ? `<span class="badge ${r.rec.dir==='up'?'b-grow':'b-warn'}" style="cursor:pointer" title="Budget recommendation — click the name to review" onclick="openDD('${r.k}')">${r.rec.dir==='up'?'▲':'▼'} budget</span>`
       : (r.opp?`<span class="badge b-grow" style="cursor:pointer" title="Opportunity — click the name to review" onclick="openDD('${r.k}')">✨</span>`:'');
     const noBudBadge = (r.spend>0.5 && !r.hasBudget)
-      ? `<span class="badge row-nobudget" title="Spending with no budget on record this month — check Settings ▸ Budgets">⚠ no budget</span>` : '';
+      ? `<span class="badge row-nobudget" style="cursor:pointer" title="Spending with no budget on record this month. If this is carryover (a budget booked in an earlier month), click to log it; otherwise check Settings ▸ Budgets." onclick="setCarryover('${r.k}')">⚠ no budget</span>` : '';
+    const coBadge = r.carryover
+      ? `<span class="badge b-fixed" style="cursor:pointer" title="Carryover — spending ${money(r.carryover*F)} from a budget booked earlier (not billed again this month). Click to edit or clear." onclick="setCarryover('${r.k}')">carryover</span>` : '';
     return `<tr${r.hidden?' style="opacity:.55"':''}>
-      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${noBudBadge}${badge}${recBadge}${hidBadge}</div></td>
+      <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${noBudBadge}${coBadge}${badge}${recBadge}${hidBadge}</div></td>
       <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
       <td>${r.live?'<span class="pos">active</span>':'<span class="muted">paused</span>'}</td>
       <td>${money(r.spend*F)}</td>
@@ -2416,6 +2435,20 @@ async function editBudget(k){
   const amount = Number(v);
   if(isNaN(amount)) return alert('Enter a number.');
   await call({action:'setBudget', label:r.name, platform, month, amount});
+  load(true);
+}
+// Carryover: the account is spending a budget booked in an earlier month (already
+// billed). Sets the ad-spend target to pace against this month, without re-billing.
+async function setCarryover(k){
+  const r = MODEL.find(x=>x.k===k); if(!r) return;
+  const platform = CHANNEL==='lsa' ? 'LSA' : CHANNEL==='meta' ? 'Meta' : 'Google';
+  const month = CHANNEL==='lsa' ? 'pool' : MONTH;
+  const cur = r.carryover ? String(Math.round(r.carryover)) : '';
+  const v = prompt(`Carryover — ${r.name} · ${platform} · ${month}.\n\nUse this when the account is spending a budget booked in an EARLIER month (already billed — not billed again). Enter the ad spend to pace to for this month, or 0 to clear.`, cur);
+  if(v===null) return;
+  const amount = Number(v);
+  if(isNaN(amount)) return alert('Enter a number.');
+  await call({action:'setCarryover', label:r.name, platform, month, amount});
   load(true);
 }
 async function toggleType(k){
