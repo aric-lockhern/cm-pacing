@@ -233,6 +233,7 @@
   .cl-move{background:rgba(242,103,34,.16);color:#f5a06a}
   .cl-campaign{background:rgba(230,171,63,.16);color:#e6ab3f}
   .cl-google{background:rgba(90,160,255,.16);color:#8fc0ff}
+  .cl-carryover{background:rgba(72,199,142,.16);color:#6fe0ad}
   .empty{padding:60px 20px;text-align:center;color:var(--muted)}
 
   /* overview / exec view */
@@ -492,6 +493,10 @@ try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('p
     <div class="settings-row"><label>Send flags to</label><input id="setEmailTo" placeholder="larry@contentmassive.com, manuel@contentmassive.com"></div>
     <div class="hint">The ⚑ flag button emails these recipients a summary of the account's numbers. Comma-separate multiple addresses.</div>
 
+    <h3 style="margin:14px 0 4px">Carryover approver</h3>
+    <div class="settings-row"><label>Approver email</label><input id="setCarryApprover" placeholder="joe@contentmassive.com"></div>
+    <div class="hint">When budget is carried over from a prior month, a written confirmation is emailed here for manual QA / approval (cc’d to the flag recipients). Leave blank to skip the email.</div>
+
     <h3 style="margin:14px 0 4px">This browser</h3>
     <div class="settings-row"><label>Your name</label><input id="setName" placeholder="Jane Doe"> <span class="muted" style="font-size:12px">signs your budget changes, moves &amp; flags in the shared change log — each teammate sets their own on their browser</span></div>
     <div class="settings-row"><label>Theme</label><div class="seg" id="themeSeg"><button data-th="dark" onclick="setTheme('dark')">Dark</button><button data-th="light" onclick="setTheme('light')">Light</button></div> <span class="muted" style="font-size:12px">per browser</span></div>
@@ -553,6 +558,10 @@ try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('p
     <div class="settings-row" style="margin-top:4px">
       <label>Ad spend ($)</label>
       <input id="coAmount" type="number" min="0" step="1" placeholder="500" style="flex:1" onkeydown="if(event.key==='Enter')submitCarryover()">
+    </div>
+    <div class="settings-row" style="margin-top:8px">
+      <label>Reason / note</label>
+      <input id="coNote" placeholder="e.g. Sept budget paid Oct 14, $210 remaining" style="flex:1">
     </div>
     <div class="settings-row" style="margin-top:12px">
       <label></label>
@@ -2465,11 +2474,17 @@ function coMonth(){ return CHANNEL==='lsa' ? 'pool' : MONTH; }
 function setCarryover(k){
   const r = MODEL.find(x=>x.k===k); if(!r) return;
   CO_K = k;
+  const approver = (CFG.carryoverApprover||'').trim();
+  const approverLine = approver
+    ? `On save this is <b>logged</b> and a written confirmation is emailed to <b>${esc(approver)}</b> (cc the team) for QA / approval.`
+    : `⚠ No <b>Carryover approver</b> is set — it will be logged, but no confirmation email is sent. Add one in <b>Settings</b> to email Joe.`;
   document.getElementById('coHint').innerHTML =
     `<b>${esc(r.name)}</b> · ${coPlatform()} · ${coMonth()}<br>`
-    + `Use this when the account is spending a budget booked in an <b>earlier month</b> (already billed — not billed again). Enter the ad spend to pace to for this month. It sets the pacing target, clears the “no budget” / ∞ flags, and is <b>not</b> added to billings or our fee.`;
+    + `Use this when the account is spending a budget booked in an <b>earlier month</b> (already billed — not billed again). Enter the ad spend to pace to for this month. It sets the pacing target, clears the “no budget” / ∞ flags, and is <b>not</b> added to billings or our fee.<br>`
+    + `<span style="color:var(--muted)">${approverLine}</span>`;
   const inp = document.getElementById('coAmount');
   inp.value = r.carryover ? String(Math.round(r.carryover)) : '';
+  document.getElementById('coNote').value = '';
   document.getElementById('coClearBtn').style.display = r.carryover ? '' : 'none';
   document.getElementById('coMsg').textContent = '';
   document.getElementById('coScrim').classList.add('on');
@@ -2482,9 +2497,27 @@ async function submitCarryover(amtOverride){
   const raw = (amtOverride!=null) ? amtOverride : document.getElementById('coAmount').value;
   const amount = Number(raw);
   if(raw==='' || isNaN(amount) || amount<0){ msg.textContent='Enter a valid amount (0 to clear).'; return; }
-  msg.textContent = 'Saving…';
+  const note = (document.getElementById('coNote').value||'').trim();
+  const by = whoami();
+  const approver = (CFG.carryoverApprover||'').trim();
+  msg.textContent = amount>0 ? (approver?'Saving & emailing confirmation…':'Saving…') : 'Clearing…';
   try{
-    await call({action:'setCarryover', label:r.name, platform:coPlatform(), month:coMonth(), amount});
+    await call({action:'setCarryover', label:r.name, platform:coPlatform(), month:coMonth(), amount, note, by});
+    // Written confirmation for QA / approval — emailed to the approver (Joe), cc the team.
+    if(amount>0 && approver){
+      const payload = {
+        title: `Carryover logged — ${r.name} (${channelLabel()})`,
+        subtitle: `Carrying over ${money(amount)} of ad spend into ${coMonth()}. It is now pacing in the tool and needs manual QA / approval.`,
+        columns: ['Field','Value'], leftCols: 1,
+        rows: [
+          ['Account', r.name], ['Channel', channelLabel()], ['Month', coMonth()],
+          ['Carryover ad spend', money(amount)], ['Reason / note', note||'—'], ['Logged by', by||'—']
+        ],
+        note: 'This spends remaining budget booked in a prior month — not billed again. Please QA and approve.'
+      };
+      try{ await call({action:'emailReport', to:approver, cc:`${TEAM_EMAIL_TO},${TEAM_EMAIL_CC}`, subject:`Carryover for QA — ${r.name} (${channelLabel()})`, payload:JSON.stringify(payload)}); }
+      catch(e){ /* carryover is saved; the email can be resent */ }
+    }
     closeCarryover();
     load(true);
   }catch(e){ msg.textContent = 'Couldn’t save — check the connection and try again.'; }
@@ -2865,6 +2898,7 @@ function openSettings(){
   document.getElementById('setCplWarn').value   = Math.round(C.cplWarn*100);
   document.getElementById('setCplCrit').value   = Math.round(C.cplCrit*100);
   document.getElementById('setEmailTo').value = CFG.emailTo||'';
+  document.getElementById('setCarryApprover').value = CFG.carryoverApprover||'';
   // restore the saved budget mapping so it's visible without re-loading tabs
   const sel = document.getElementById('setBudTab');
   if(CFG.budgetTab){
@@ -3009,6 +3043,13 @@ function changeLogEntries(){
       who:String(r.RequestedBy||''),
       detail:`${String(r.Action||'').toLowerCase()} ${String(r.Campaign||'')}${r.Note?(' · '+r.Note):''}`.trim(),
       status:String(r.Status||'') }); });
+  // carryover budgets (spending a prior month's budget) — logged for QA / approval
+  (DATA.carryover||[]).forEach(r=>{
+    const amt=Number(r.Amount)||0; if(amt<=0) return;
+    out.push({ ts:String(r.Updated||''), franchise:String(r.Label||'').trim(), slug:'carryover', kind:'Carryover',
+      who:String(r.By||''),
+      detail:`${String(r.Platform||'')} ${String(r.Month||'')} carryover ${money(amt)}${r.Note?(' · '+r.Note):''}`.trim(),
+      status:'' }); });
   // real Google Ads change history (change_event feed) — changes made directly in Google Ads
   (DATA.googleChanges||[]).forEach(r=>{
     out.push({ ts:String(r.Date||''), franchise:String(r.Label||'').trim(), slug:'google', kind:'Google Ads',
@@ -3062,6 +3103,7 @@ async function saveSettings(){
     alertCplWarn:   Number(val('setCplWarn'))/100,
     alertCplCrit:   Number(val('setCplCrit'))/100,
     emailTo:        val('setEmailTo'),
+    carryoverApprover: val('setCarryApprover'),
     metaSheetUrl:   val('setMetaUrl')   || DEFAULT_META_URL,
     metaTab:        val('setMetaTab')   || DEFAULT_META_TAB,
     metaRange:      val('setMetaRange') || DEFAULT_META_RANGE
