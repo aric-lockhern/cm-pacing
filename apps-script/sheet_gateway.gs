@@ -1209,7 +1209,9 @@ function flagHtml_(d) {
   var out = '<div style="font-family:Arial,sans-serif;color:' + MAIL_INK + ';max-width:640px">';
   out += '<div style="border-left:4px solid ' + MAIL_ACCENT + ';padding:2px 0 2px 12px;margin-bottom:14px">' +
          '<div style="font:700 18px Arial,sans-serif">' + esc(d.label) + '</div>' +
-         '<div style="font:13px Arial,sans-serif;color:' + MAIL_MUTED + '">' + esc(d.month) +
+         (d.channel ? '<div style="font:700 13px Arial,sans-serif;color:' + MAIL_ACCENT + ';text-transform:uppercase;letter-spacing:.4px;margin-top:2px">' + esc(d.channel) + '</div>' : '') +
+         '<div style="font:13px Arial,sans-serif;color:' + MAIL_MUTED + ';margin-top:1px">' + esc(d.month) +
+         (d.channel ? ' &middot; ' + esc(d.channel) : '') +
          ' &middot; ' + esc(d.status) + ' &middot; ' + esc(d.type) + '</div></div>';
 
   if (d.note) {
@@ -1254,7 +1256,8 @@ function flagHtml_(d) {
 function flagText_(d) {
   var L = [];
   if (d.note) L.push('Note: ' + d.note);
-  L.push(d.label + ' — ' + d.month, d.status + ' · ' + d.type, '');
+  L.push(d.label + (d.channel ? ' [' + d.channel + ']' : '') + ' — ' + d.month,
+         (d.channel ? d.channel + ' · ' : '') + d.status + ' · ' + d.type, '');
   if (d.basis) L.push(d.basis);
   L.push('Pace: ' + d.pace + ' (' + d.paceWord + ')');
   L.push('MTD ad spend: ' + d.spend + '  (expected by today ' + d.expected + ')');

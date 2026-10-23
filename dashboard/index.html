@@ -2551,6 +2551,8 @@ async function dismissAllAlerts(days){
 /* ── flag → email ──────────────────────────────────────────────────────── */
 let FLAG_K = null;
 function paceWord(p){ return p>1.05 ? 'over' : p<0.95 ? 'under' : 'on pace'; }
+// The channel in plain terms for emails, so recipients know the platform at a glance.
+function channelLabel(){ return CHANNEL==='google' ? 'Google Ads' : CHANNEL==='lsa' ? 'LSA' : 'Facebook'; }
 
 function openFlag(k){
   const r = MODEL.find(x=>x.k===k); if(!r) return;
@@ -2595,7 +2597,7 @@ async function sendFlag(){
     .map(c=>[c.name, money(c.spend*F), fmt(c.clicks), cvr(c.conv,c.clicks), fmtLeads(c.conv), c.conv?money(c.spend*F/c.conv):'—']);
 
   const payload = {
-    label:r.name, month:MONTH, status:r.live?'active':'paused', type:r.type,
+    label:r.name, channel:channelLabel(), month:MONTH, status:r.live?'active':'paused', type:r.type,
     note:document.getElementById('flagNote').value.trim(),
     pace:pct(r.pace), paceWord:pw,
     basis: MARKUP ? 'Figures include our markup (what the client is billed).'
@@ -2612,7 +2614,7 @@ async function sendFlag(){
     sender: me ? `Flagged by ${me} from the pacing dashboard.` : 'Sent from the pacing dashboard.'
   };
 
-  const subject = `Pacing flag: ${r.name} — ${pct(r.pace)} (${pw})`;
+  const subject = `Pacing flag: ${r.name} (${channelLabel()}) — ${pct(r.pace)} (${pw})`;
   try{
     const res = await call({action:'sendEmail', subject, payload:JSON.stringify(payload)});
     if(res && res.ok){ msg.textContent = `sent to ${res.to}`; setTimeout(closeFlag, 1200); }
