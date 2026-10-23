@@ -41,7 +41,7 @@ var TABS = {
   metaUntagged:{ name: 'Meta_Untagged', header: ['Campaign','Account','Spend','Updated'] },
   googleChanges:{ name: 'Google_Changes', header: ['Date','Label','Campaign','Type','Change','User','Source'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
-  carryover:  { name: 'Carryover',     header: ['Label','Platform','Month','Amount','Note','Updated'] },
+  carryover:  { name: 'Carryover',     header: ['Label','Platform','Month','Amount','Note','Updated','By'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
   budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
@@ -386,7 +386,7 @@ function setCarryover_(p) {
   var tab = ss.getSheetByName(TABS.carryover.name) || ss.insertSheet(TABS.carryover.name);
   ensureHeader_(tab, TABS.carryover);
   var label = String(p.label), platform = String(p.platform || 'Google'), month = String(p.month);
-  var amount = Number(p.amount) || 0, note = String(p.note || '');
+  var amount = Number(p.amount) || 0, note = String(p.note || ''), by = String(p.by || '');
   var values = tab.getDataRange().getValues();
   var head = headIndex_(values[0]);
   var found = -1;
@@ -398,7 +398,7 @@ function setCarryover_(p) {
   if (amount <= 0) {                         // clear
     if (found > 0) tab.deleteRow(found);
   } else {
-    var rowVals = [label, platform, month, amount, note, new Date()];
+    var rowVals = [label, platform, month, amount, note, new Date(), by];
     if (found > 0) tab.getRange(found, 1, 1, rowVals.length).setValues([rowVals]);
     else tab.appendRow(rowVals);
     forceText_(tab, TABS.carryover);
