@@ -544,6 +544,25 @@ try{ document.documentElement.setAttribute('data-theme', localStorage.getItem('p
   </div>
 </div>
 
+<!-- carryover budget (spending a budget booked in an earlier month) -->
+<div class="scrim" id="coScrim" onclick="if(event.target===this)closeCarryover()">
+  <div class="modal" style="max-width:460px">
+    <button class="close ghost" onclick="closeCarryover()">Close</button>
+    <h2>Carryover budget</h2>
+    <div class="hint" id="coHint"></div>
+    <div class="settings-row" style="margin-top:4px">
+      <label>Ad spend ($)</label>
+      <input id="coAmount" type="number" min="0" step="1" placeholder="500" style="flex:1" onkeydown="if(event.key==='Enter')submitCarryover()">
+    </div>
+    <div class="settings-row" style="margin-top:12px">
+      <label></label>
+      <button class="primary" onclick="submitCarryover()">Save carryover</button>
+      <button class="ghost" id="coClearBtn" onclick="clearCarryover()">Clear</button>
+      <span id="coMsg" class="muted" style="flex:1"></span>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ═══════════════ CONFIG — replace these two per agency ═══════════════ */
 const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwxNyVRNkxnNwoiMfOcTV6-dvry51fUAMUQPbF47X-InhhEtTaB2-kzsZBadlaMRu9O/exec';
@@ -2439,18 +2458,38 @@ async function editBudget(k){
 }
 // Carryover: the account is spending a budget booked in an earlier month (already
 // billed). Sets the ad-spend target to pace against this month, without re-billing.
-async function setCarryover(k){
+// Opens a clean modal (no browser prompt).
+let CO_K = null;
+function coPlatform(){ return CHANNEL==='lsa' ? 'LSA' : CHANNEL==='meta' ? 'Meta' : 'Google'; }
+function coMonth(){ return CHANNEL==='lsa' ? 'pool' : MONTH; }
+function setCarryover(k){
   const r = MODEL.find(x=>x.k===k); if(!r) return;
-  const platform = CHANNEL==='lsa' ? 'LSA' : CHANNEL==='meta' ? 'Meta' : 'Google';
-  const month = CHANNEL==='lsa' ? 'pool' : MONTH;
-  const cur = r.carryover ? String(Math.round(r.carryover)) : '';
-  const v = prompt(`Carryover — ${r.name} · ${platform} · ${month}.\n\nUse this when the account is spending a budget booked in an EARLIER month (already billed — not billed again). Enter the ad spend to pace to for this month, or 0 to clear.`, cur);
-  if(v===null) return;
-  const amount = Number(v);
-  if(isNaN(amount)) return alert('Enter a number.');
-  await call({action:'setCarryover', label:r.name, platform, month, amount});
-  load(true);
+  CO_K = k;
+  document.getElementById('coHint').innerHTML =
+    `<b>${esc(r.name)}</b> · ${coPlatform()} · ${coMonth()}<br>`
+    + `Use this when the account is spending a budget booked in an <b>earlier month</b> (already billed — not billed again). Enter the ad spend to pace to for this month. It sets the pacing target, clears the “no budget” / ∞ flags, and is <b>not</b> added to billings or our fee.`;
+  const inp = document.getElementById('coAmount');
+  inp.value = r.carryover ? String(Math.round(r.carryover)) : '';
+  document.getElementById('coClearBtn').style.display = r.carryover ? '' : 'none';
+  document.getElementById('coMsg').textContent = '';
+  document.getElementById('coScrim').classList.add('on');
+  setTimeout(()=>{ inp.focus(); inp.select(); }, 30);
 }
+function closeCarryover(){ document.getElementById('coScrim').classList.remove('on'); CO_K=null; }
+async function submitCarryover(amtOverride){
+  const r = MODEL.find(x=>x.k===CO_K); if(!r) return;
+  const msg = document.getElementById('coMsg');
+  const raw = (amtOverride!=null) ? amtOverride : document.getElementById('coAmount').value;
+  const amount = Number(raw);
+  if(raw==='' || isNaN(amount) || amount<0){ msg.textContent='Enter a valid amount (0 to clear).'; return; }
+  msg.textContent = 'Saving…';
+  try{
+    await call({action:'setCarryover', label:r.name, platform:coPlatform(), month:coMonth(), amount});
+    closeCarryover();
+    load(true);
+  }catch(e){ msg.textContent = 'Couldn’t save — check the connection and try again.'; }
+}
+function clearCarryover(){ submitCarryover(0); }
 async function toggleType(k){
   const r = MODEL.find(x=>x.k===k); if(!r) return;
   const next = r.type==='e-comm'?'lead-gen':'e-comm';
