@@ -1540,11 +1540,11 @@ function build(){
   // Carryover: accounts spending a budget booked in an earlier month (already billed).
   // Map franchise → ad spend to pace to THIS month. Applied only when there's no booked
   // budget this month, and never added to billings / our fee (it isn't billed again).
-  const carryoverMap = {};
+  const carryoverMap = {}, carryoverStat = {};
   (DATA.carryover||[]).forEach(r=>{
     if(key(r.Platform)!==key(CH.platform)) return;
     if(String(r.Month).trim()!==CH.budgetMonth) return;
-    const amt=Number(r.Amount)||0; if(amt>0) carryoverMap[key(r.Label)]=amt;
+    const amt=Number(r.Amount)||0; if(amt>0){ carryoverMap[key(r.Label)]=amt; carryoverStat[key(r.Label)]=String(r.Status||'pending').toLowerCase(); }
   });
   Object.keys(carryoverMap).forEach(k=>labels.add(k));
 
@@ -1563,6 +1563,7 @@ function build(){
     // carryover applies ONLY when there's no booked budget this month; it sets the ad
     // spend target directly (no fee) and adds nothing to billings.
     const carryover = gross>0 ? 0 : (carryoverMap[k] || 0);
+    const carryoverStatus = carryover>0 ? (carryoverStat[k]||'pending') : '';
     const adTarget = carryover>0 ? carryover : gross * fee1;
     const feeAmt = carryover>0 ? 0 : gross - adTarget;
     const hasFeed = feed.hasOwnProperty(k);
@@ -1621,7 +1622,7 @@ function build(){
     MODEL.push({ k, name:disp, gross, adTarget, fee:feeAmt, spend, forecast:projected, runRate,
       projected, onTarget, pace, delta, yesterday, yesterdayDate:ydayDate,
       conv, cpa, rev, roas, type, hidden, live, dailyBudget:effDaily, dailyApplied:appliedDaily, dailyPending:pendDaily, reqDaily,
-      hasBudget: carryover>0 || gross>0, carryover, dailyTarget, series, alert, corrected, moved,
+      hasBudget: carryover>0 || gross>0, carryover, carryoverStatus, dailyTarget, series, alert, corrected, moved,
       campaigns: campByLabel[k] || {}, gLoaded: CHANNEL!=='google', g:{}, m:{} });
   });
   MODEL.forEach(r=>{ r.rec = budgetRec(r); r.opp = budgetOpp(r); });   // Google budget recs / opportunities
@@ -2431,8 +2432,10 @@ function renderRows(){
       : (r.opp?`<span class="badge b-grow" style="cursor:pointer" title="Opportunity — click the name to review" onclick="openDD('${r.k}')">✨</span>`:'');
     const noBudBadge = (r.spend>0.5 && !r.hasBudget)
       ? `<span class="badge row-nobudget" style="cursor:pointer" title="Spending with no budget on record this month. If this is carryover (a budget booked in an earlier month), click to log it; otherwise check Settings ▸ Budgets." onclick="setCarryover('${r.k}')">⚠ no budget</span>` : '';
+    const coCls = r.carryoverStatus==='approved' ? 'b-grow' : r.carryoverStatus==='rejected' ? 'b-warn' : 'b-fixed';
+    const coTag = r.carryoverStatus==='approved' ? 'carryover ✓' : r.carryoverStatus==='rejected' ? 'carryover ✗ rejected' : 'carryover · pending';
     const coBadge = r.carryover
-      ? `<span class="badge b-fixed" style="cursor:pointer" title="Carryover — spending ${money(r.carryover*F)} from a budget booked earlier (not billed again this month). Click to edit or clear." onclick="setCarryover('${r.k}')">carryover</span>` : '';
+      ? `<span class="badge ${coCls}" style="cursor:pointer" title="Carryover — spending ${money(r.carryover*F)} from a budget booked earlier (not billed again this month). ${r.carryoverStatus==='approved'?'Approved by the carryover approver.':r.carryoverStatus==='rejected'?'REJECTED by the approver — review it.':'Awaiting approver sign-off.'} Click to edit or clear." onclick="setCarryover('${r.k}')">${coTag}</span>` : '';
     return `<tr${r.hidden?' style="opacity:.55"':''}>
       <td><div class="fr"><span class="name" onclick="openDD('${r.k}')">${esc(r.name)}</span>${noBudBadge}${coBadge}${badge}${recBadge}${hidBadge}</div></td>
       <td><span class="type-pill" onclick="toggleType('${r.k}')">${r.type}</span></td>
@@ -2474,16 +2477,28 @@ function coMonth(){ return CHANNEL==='lsa' ? 'pool' : MONTH; }
 // Previous calendar month as 'YYYY-MM'.
 function prevMonth(ym){ const p=String(ym||MONTH).split('-').map(Number); const d=new Date(p[0], (p[1]||1)-2, 1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 // Auto-suggest the carryover = last month's UNSPENT ad spend (ad-spend target − spend).
+// Looks up THIS account's budget for the previous month on THIS channel; if that month
+// has no budget row, falls back to the most recent prior month that does. Returns the
+// months it actually found (budget + spend) so the modal can show what's on record.
 function carryoverSuggestion(r){
   if(CHANNEL==='lsa') return null;                 // LSA runs on a burn-down pool already
   const lm = prevMonth(MONTH), plat = coPlatform();
-  let billed=0;
-  (DATA.budgets||[]).forEach(b=>{ if(key(b.Platform)!==key(plat)) return; if(String(b.Month).trim()!==lm) return;
-    if(key(b.Label)!==r.k) return; billed += Number(b['Total Budget'])||0; });
   const fee = CHANNEL==='meta' ? (Number(CFG.metaFee)||0) : (Number(CFG.googleFee)||0);
-  const target = billed*(1-fee);
-  let spend=0; const s=r.series||{}; for(const d in s){ if(String(d).slice(0,7)===lm) spend+=s[d].spend; }
-  return { lm, billed, target:Math.round(target), spend:Math.round(spend), leftover:Math.max(0, Math.round(target-spend)) };
+  // this account's budget by month on this channel
+  const budByMonth = {};
+  (DATA.budgets||[]).forEach(b=>{ if(key(b.Platform)!==key(plat)) return; if(key(b.Label)!==r.k) return;
+    const m=String(b.Month).trim(); if(/^\d{4}-\d{2}$/.test(m)) budByMonth[m]=(budByMonth[m]||0)+(Number(b['Total Budget'])||0); });
+  // this account's ad spend by month (from the daily series for this channel)
+  const spendByMonth = {}; const s=r.series||{};
+  for(const d in s){ const m=String(d).slice(0,7); spendByMonth[m]=(spendByMonth[m]||0)+s[d].spend; }
+  const budgetMonths = Object.keys(budByMonth).sort(), spendMonths = Object.keys(spendByMonth).sort();
+  // prefer last month; else the most recent prior month that has a budget on record
+  const basis = budByMonth[lm]!=null ? lm : (budgetMonths.filter(m=>m<MONTH).pop() || null);
+  if(basis==null) return { lm, basis:null, billed:0, target:0, spend:0, leftover:0, hasSpendData:false, budgetMonths, spendMonths };
+  const billed = budByMonth[basis], target = billed*(1-fee);
+  const spend = Math.round(spendByMonth[basis]||0);
+  return { lm, basis, billed, target:Math.round(target), spend, leftover:Math.max(0, Math.round(target-spend)),
+           hasSpendData: spendByMonth[basis]!=null, fallback: basis!==lm, budgetMonths, spendMonths };
 }
 function applyCarrySuggestion(){ if(CO_SUGGEST!=null){ const inp=document.getElementById('coAmount'); inp.value=String(CO_SUGGEST); inp.focus(); } }
 function setCarryover(k){
@@ -2496,10 +2511,16 @@ function setCarryover(k){
   // auto-suggest last month's leftover ad spend (budget target − what was spent)
   const sug = carryoverSuggestion(r);
   CO_SUGGEST = (sug && sug.leftover>0) ? sug.leftover : null;
-  const suggestLine = (sug && sug.billed>0)
-    ? `Suggested <b>${money(sug.leftover)}</b> — ${monthLabel(sug.lm)} left over (ad-spend target ${money(sug.target)} − spent ${money(sug.spend)}).`
+  let suggestLine = '';
+  if(sug && sug.basis){
+    suggestLine = `Suggested <b>${money(sug.leftover)}</b> — ${monthLabel(sug.basis)} left over (ad-spend budget ${money(sug.target)} − spent ${money(sug.spend)}).`
       + (CO_SUGGEST!=null ? ` <a href="#" onclick="applyCarrySuggestion();return false;">use</a>` : '')
-    : `No ${monthLabel(prevMonth(MONTH))} budget on record to base a suggestion on — enter the amount manually.`;
+      + (sug.fallback ? `<br><span style="color:var(--warn)">No ${monthLabel(sug.lm)} ${coPlatform()} budget on record — based on ${monthLabel(sug.basis)} instead.</span>` : '')
+      + (!sug.hasSpendData ? `<br><span style="color:var(--warn)">No ${monthLabel(sug.basis)} spend in the data, so leftover shows the full budget — verify the spend.</span>` : '');
+  } else if(sug){
+    const bm = sug.budgetMonths.length ? sug.budgetMonths.map(monthLabel).join(', ') : 'none';
+    suggestLine = `No ${coPlatform()} budget on record for this account in any prior month (budget months on file: ${bm}). Check the budget-sheet mapping, or enter the amount manually.`;
+  }
   document.getElementById('coHint').innerHTML =
     `<b>${esc(r.name)}</b> · ${coPlatform()} · ${coMonth()}<br>`
     + `Use this when the account is spending a budget booked in an <b>earlier month</b> (already billed — not billed again). Enter the ad spend to pace to for this month. It sets the pacing target, clears the “no budget” / ∞ flags, and is <b>not</b> added to billings or our fee.<br>`
@@ -2522,23 +2543,25 @@ async function submitCarryover(amtOverride){
   const note = (document.getElementById('coNote').value||'').trim();
   const by = whoami();
   const approver = (CFG.carryoverApprover||'').trim();
-  msg.textContent = amount>0 ? (approver?'Saving & emailing confirmation…':'Saving…') : 'Clearing…';
+  const coId = 'co_'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);   // ties the approval link to this carryover
+  msg.textContent = amount>0 ? (approver?'Saving & emailing for approval…':'Saving…') : 'Clearing…';
   try{
-    await call({action:'setCarryover', label:r.name, platform:coPlatform(), month:coMonth(), amount, note, by});
+    await call({action:'setCarryover', label:r.name, platform:coPlatform(), month:coMonth(), amount, note, by, id:coId});
     // Written confirmation for QA / approval — emailed to the approver (Joe), cc the team.
     if(amount>0 && approver){
       const sug = carryoverSuggestion(r);
       const feeRate = CHANNEL==='meta' ? (Number(CFG.metaFee)||0) : (Number(CFG.googleFee)||0);
+      const basisLbl = (sug && sug.basis) ? monthLabel(sug.basis) : 'Prior month';
       const rows = [
         ['Account', r.name],
         ['Channel', channelLabel()],
         ['Carrying into', coMonth()]
       ];
-      if(sug && sug.billed>0){
-        rows.push([`Last month (${monthLabel(sug.lm)}) client budget`, money(sug.billed)]);
+      if(sug && sug.basis){
+        rows.push([`${basisLbl} client budget`, money(sug.billed)]);
         rows.push([`Our fee / margin (${Math.round(feeRate*100)}%)`, money(sug.billed - sug.target)]);
-        rows.push(['Last month ad-spend budget', money(sug.target)]);
-        rows.push(['Last month ad spend (actual)', money(sug.spend)]);
+        rows.push([`${basisLbl} ad-spend budget`, money(sug.target)]);
+        rows.push([`${basisLbl} ad spend (actual)`, money(sug.spend) + (sug.hasSpendData?'':' — no spend data found')]);
         rows.push(['Leftover ad spend', money(Math.max(0, sug.target - sug.spend))]);
       }
       rows.push(['Carrying over this month (ad spend)', money(amount)]);
@@ -2547,10 +2570,11 @@ async function submitCarryover(amtOverride){
       rows.push(['Logged by', by||'—']);
       const payload = {
         title: `Carryover for QA — ${r.name} (${channelLabel()})`,
-        subtitle: `${r.name} is spending leftover budget from ${sug?monthLabel(sug.lm):'a prior month'} into ${coMonth()}. Carrying over ${money(amount)} of ad spend — now pacing in the tool and needs manual QA / approval. It is NOT billed again (the client already paid when the budget was booked).`,
+        subtitle: `${r.name} is spending leftover budget from ${basisLbl} into ${coMonth()}. Carrying over ${money(amount)} of ad spend — now pacing in the tool and needs manual QA / approval. It is NOT billed again (the client already paid when the budget was booked).`,
         columns: ['Item','Amount'], leftCols: 1,
         rows,
-        note: 'Figures above are last month’s client budget, our fee/margin, the ad-spend budget and what was actually spent — so you can confirm the leftover being carried over. Please QA and approve.'
+        cta: { label: '✓ Review & approve carryover', url: `${LS.url()}?action=carryoverReview&id=${encodeURIComponent(coId)}` },
+        note: 'Figures above are the prior month’s client budget, our fee/margin, the ad-spend budget and what was actually spent — so you can confirm the leftover being carried over. Click the button to approve or reject.'
       };
       try{ await call({action:'emailReport', to:approver, cc:`${TEAM_EMAIL_TO},${TEAM_EMAIL_CC}`, subject:`Carryover for QA — ${r.name} (${channelLabel()})`, payload:JSON.stringify(payload)}); }
       catch(e){ /* carryover is saved; the email can be resent */ }
@@ -3083,10 +3107,12 @@ function changeLogEntries(){
   // carryover budgets (spending a prior month's budget) — logged for QA / approval
   (DATA.carryover||[]).forEach(r=>{
     const amt=Number(r.Amount)||0; if(amt<=0) return;
+    const st=String(r.Status||'pending').toLowerCase();
+    const stTxt = st==='approved' ? `approved${r.DecidedBy?(' · '+r.DecidedBy):''}` : st==='rejected' ? `rejected${r.DecidedBy?(' · '+r.DecidedBy):''}` : 'pending approval';
     out.push({ ts:String(r.Updated||''), franchise:String(r.Label||'').trim(), slug:'carryover', kind:'Carryover',
       who:String(r.By||''),
       detail:`${String(r.Platform||'')} ${String(r.Month||'')} carryover ${money(amt)}${r.Note?(' · '+r.Note):''}`.trim(),
-      status:'' }); });
+      status:stTxt }); });
   // real Google Ads change history (change_event feed) — changes made directly in Google Ads
   (DATA.googleChanges||[]).forEach(r=>{
     out.push({ ts:String(r.Date||''), franchise:String(r.Label||'').trim(), slug:'google', kind:'Google Ads',

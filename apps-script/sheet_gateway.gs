@@ -41,7 +41,7 @@ var TABS = {
   metaUntagged:{ name: 'Meta_Untagged', header: ['Campaign','Account','Spend','Updated'] },
   googleChanges:{ name: 'Google_Changes', header: ['Date','Label','Campaign','Type','Change','User','Source'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
-  carryover:  { name: 'Carryover',     header: ['Label','Platform','Month','Amount','Note','Updated','By'] },
+  carryover:  { name: 'Carryover',     header: ['Label','Platform','Month','Amount','Note','Updated','By','Id','Status','DecidedBy','DecidedAt'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
   budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
@@ -63,6 +63,10 @@ var TEXT_COLS = {
 
 function doGet(e) {
   var p = e.parameter || {};
+  // Carryover approve/reject links (emailed to the approver). Authorized by the random
+  // carryover id, not the shared secret, so they work from an email click.
+  if (p.action === 'carryoverReview')   return carryoverReviewPage_(p.id);
+  if (p.action === 'carryoverDecision') return carryoverDecisionPage_(p.id, p.d, p.by);
   var cb = p.callback || 'callback';
   if (p.secret !== SHARED_SECRET) return jsonp_(cb, { ok: false, error: 'bad secret' });
 
@@ -387,6 +391,7 @@ function setCarryover_(p) {
   ensureHeader_(tab, TABS.carryover);
   var label = String(p.label), platform = String(p.platform || 'Google'), month = String(p.month);
   var amount = Number(p.amount) || 0, note = String(p.note || ''), by = String(p.by || '');
+  var id = String(p.id || Utilities.getUuid());
   var values = tab.getDataRange().getValues();
   var head = headIndex_(values[0]);
   var found = -1;
@@ -398,13 +403,84 @@ function setCarryover_(p) {
   if (amount <= 0) {                         // clear
     if (found > 0) tab.deleteRow(found);
   } else {
-    var rowVals = [label, platform, month, amount, note, new Date(), by];
+    // a new/changed carryover resets approval to pending (needs re-confirmation)
+    var rowVals = [label, platform, month, amount, note, new Date(), by, id, 'pending', '', ''];
     if (found > 0) tab.getRange(found, 1, 1, rowVals.length).setValues([rowVals]);
     else tab.appendRow(rowVals);
     forceText_(tab, TABS.carryover);
   }
   bustCache_();
   return { ok: true };
+}
+
+/* ── carryover approve / reject (email-link flow) ─────────────────────────── */
+function carryoverFindById_(id) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.carryover.name); if (!tab) return null;
+  var values = tab.getDataRange().getValues(); if (!values.length) return null;
+  var head = headIndex_(values[0]); if (head.Id == null) return null;
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][head.Id]).trim() === String(id || '').trim()) return { tab: tab, row: r + 1, head: head, data: values[r] };
+  }
+  return null;
+}
+function esc_(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function platformLabel_(p) { p = String(p || '').toLowerCase(); return p === 'meta' ? 'Facebook' : p === 'lsa' ? 'LSA' : p === 'google' ? 'Google Ads' : String(p); }
+function carryoverHtml_(title, body) {
+  var html = '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<style>body{font:15px/1.5 Arial,sans-serif;color:#2b2a35;background:#f4f4f7;margin:0;padding:20px}'
+    + '.card{max-width:520px;margin:20px auto;background:#fff;border:1px solid #e4e4ea;border-radius:12px;padding:22px 24px}'
+    + 'h1{font-size:19px;margin:0 0 6px}.muted{color:#6c6b78;font-size:13px}table{border-collapse:collapse;width:100%;margin:12px 0}'
+    + 'td{padding:6px 8px;border-bottom:1px solid #eee;font-size:14px}td.k{color:#6c6b78;white-space:nowrap}'
+    + '.btn{display:inline-block;text-decoration:none;font:600 14px Arial,sans-serif;padding:11px 20px;border-radius:7px;margin:8px 10px 0 0}'
+    + '.ok{background:#1f9d5b;color:#fff}.no{background:#d64535;color:#fff}.done{font-weight:700}</style></head>'
+    + '<body><div class="card">' + body + '</div></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle(title).addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+function carryoverRowDetails_(hit) {
+  var d = hit.data, h = hit.head;
+  function g(name) { return h[name] != null ? d[h[name]] : ''; }
+  var amt = Number(g('Amount')) || 0;
+  return '<table>'
+    + '<tr><td class="k">Account</td><td>' + esc_(g('Label')) + '</td></tr>'
+    + '<tr><td class="k">Channel</td><td>' + esc_(platformLabel_(g('Platform'))) + '</td></tr>'
+    + '<tr><td class="k">Month</td><td>' + esc_(g('Month')) + '</td></tr>'
+    + '<tr><td class="k">Carryover ad spend</td><td>$' + Math.round(amt) + '</td></tr>'
+    + (g('Note') ? '<tr><td class="k">Reason</td><td>' + esc_(g('Note')) + '</td></tr>' : '')
+    + '<tr><td class="k">Logged by</td><td>' + esc_(g('By')) + '</td></tr>'
+    + '</table>';
+}
+function carryoverReviewPage_(id) {
+  var hit = carryoverFindById_(id);
+  if (!hit) return carryoverHtml_('Carryover', '<h1>Carryover not found</h1><p class="muted">This carryover is no longer on file — it may have been changed or cleared. No action needed.</p>');
+  var status = String(hit.data[hit.head.Status] || 'pending').toLowerCase();
+  if (status === 'approved' || status === 'rejected') {
+    return carryoverHtml_('Carryover', '<h1>Already ' + status + '</h1>' + carryoverRowDetails_(hit)
+      + '<p class="muted">Decided by ' + esc_(hit.data[hit.head.DecidedBy] || '') + ' on ' + esc_(String(hit.data[hit.head.DecidedAt] || '')) + '.</p>');
+  }
+  var base = ScriptApp.getService().getUrl();
+  var who = String(readConfig_(SpreadsheetApp.openById(SPREADSHEET_ID)).carryoverApprover || '');
+  var approve = base + '?action=carryoverDecision&d=approve&by=' + encodeURIComponent(who) + '&id=' + encodeURIComponent(id);
+  var reject  = base + '?action=carryoverDecision&d=reject&by='  + encodeURIComponent(who) + '&id=' + encodeURIComponent(id);
+  return carryoverHtml_('Review carryover',
+    '<h1>Carryover — needs your OK</h1>'
+    + '<p class="muted">Please confirm this account is spending leftover budget from a prior month (already billed, not billed again).</p>'
+    + carryoverRowDetails_(hit)
+    + '<p><a class="btn ok" href="' + approve + '">&#10003; Approve</a><a class="btn no" href="' + reject + '">&#10007; Reject</a></p>');
+}
+function carryoverDecisionPage_(id, d, by) {
+  var hit = carryoverFindById_(id);
+  if (!hit) return carryoverHtml_('Carryover', '<h1>Carryover not found</h1><p class="muted">This carryover is no longer on file — it may have been changed or cleared.</p>');
+  var decision = String(d || '').toLowerCase() === 'reject' ? 'rejected' : 'approved';
+  hit.tab.getRange(hit.row, hit.head.Status + 1).setValue(decision);
+  hit.tab.getRange(hit.row, hit.head.DecidedBy + 1).setValue(String(by || ''));
+  hit.tab.getRange(hit.row, hit.head.DecidedAt + 1).setValue(new Date());
+  bustCache_();
+  var word = decision === 'approved' ? 'Approved &#10003;' : 'Rejected &#10007;';
+  return carryoverHtml_('Carryover ' + decision,
+    '<h1 class="done">' + word + '</h1>'
+    + carryoverRowDetails_(hit)
+    + '<p class="muted">Recorded' + (by ? ' as ' + esc_(by) : '') + '. This is logged in the pacing tool.</p>');
 }
 
 function setConfig_(key, value) {
@@ -1126,9 +1202,11 @@ function emailReport_(p) {
     + (d.subtitle ? '<div style="color:' + MAIL_MUTED + ';font-size:13px;margin-bottom:12px">' + esc(d.subtitle) + '</div>' : '')
     + (rows.length ? '<table style="border-collapse:collapse;font-variant-numeric:tabular-nums"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>'
                    : '<div style="color:' + MAIL_MUTED + '">Nothing to report.</div>')
+    + (d.cta && d.cta.url ? '<div style="margin:16px 0 4px"><a href="' + esc(d.cta.url) + '" style="display:inline-block;background:' + MAIL_ACCENT + ';color:#fff;text-decoration:none;font:600 14px Arial,sans-serif;padding:11px 20px;border-radius:7px">' + esc(d.cta.label || 'Open') + '</a></div>' : '')
     + (d.note ? '<div style="color:' + MAIL_MUTED + ';font-size:12px;margin-top:10px">' + esc(d.note) + '</div>' : '')
     + '</div>';
-  var text = (d.title || 'Update') + '\n' + (d.subtitle || '') + '\n\n' + [cols].concat(rows).map(function (r) { return r.join('\t'); }).join('\n');
+  var text = (d.title || 'Update') + '\n' + (d.subtitle || '') + '\n\n' + [cols].concat(rows).map(function (r) { return r.join('\t'); }).join('\n')
+    + (d.cta && d.cta.url ? '\n\n' + (d.cta.label || 'Open') + ': ' + d.cta.url : '');
   var opts = { to: to, subject: p.subject || d.title || 'Content Massive update', htmlBody: html, body: text };
   if (p.cc) opts.cc = String(p.cc);
   try { MailApp.sendEmail(opts); return { ok: true, to: to, cc: p.cc || '' }; }
