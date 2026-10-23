@@ -41,6 +41,7 @@ var TABS = {
   metaUntagged:{ name: 'Meta_Untagged', header: ['Campaign','Account','Spend','Updated'] },
   googleChanges:{ name: 'Google_Changes', header: ['Date','Label','Campaign','Type','Change','User','Source'] },
   budgets:    { name: 'Budgets',       header: ['Label','Platform','Month','Total Budget','Updated'] },
+  carryover:  { name: 'Carryover',     header: ['Label','Platform','Month','Amount','Note','Updated'] },
   budgetLog:  { name: 'Budget_Changes',header: ['Timestamp','Label','Platform','Month','Old','New','Source','Ack'] },
   budgetQueue:{ name: 'Budget_Queue',  header: ['Timestamp','Label','NewDailyBudget','RequestedBy','Status','AppliedAt','Note'] },
   budgetMoves:{ name: 'Budget_Moves',  header: ['Id','Timestamp','Month','Franchise','From','To','Amount','By','Note','Void'] },
@@ -53,6 +54,7 @@ var TABS = {
 // columns forced to plain-text so Sheets doesn't coerce them
 var TEXT_COLS = {
   'Budgets':    ['Month'],
+  'Carryover':  ['Month'],
   'Dismissals': ['Until'],
   'Meta_Daily': []
 };
@@ -81,6 +83,7 @@ function doGet(e) {
     switch (p.action) {
       case 'campaignDaily': out = campaignDaily_(p.label); break;
       case 'setBudget':  out = setBudget_(p); break;
+      case 'setCarryover': out = setCarryover_(p); break;
       case 'setConfig':  out = setConfig_(p.key, p.value); break;
       case 'setConfigBatch': out = setConfigBatch_(p.pairs); pubSoonSafe_(); break;
       case 'syncBudgets':  out = syncBudgets_(p); break;
@@ -269,6 +272,7 @@ function getDataString_(force) {
     campaignQueue:readTab_(ss, TABS.campaignQueue),
     budgetMoves:readTab_(ss, TABS.budgetMoves),
     budgets:    readTab_(ss, TABS.budgets),
+    carryover:  readTab_(ss, TABS.carryover),
     budgetLog:  readTab_(ss, TABS.budgetLog),
     groups:     readTab_(ss, TABS.groups),
     dismissals: readTab_(ss, TABS.dismissals),
@@ -371,6 +375,34 @@ function setBudget_(p) {
   if (found > 0) tab.getRange(found, 1, 1, rowVals.length).setValues([rowVals]);
   else tab.appendRow(rowVals);
   forceText_(tab, TABS.budgets);
+  bustCache_();
+  return { ok: true };
+}
+
+// Carryover: an account spending a budget booked in an earlier month. Stores the ad
+// spend to pace to THIS month (not billed again). amount<=0 removes the entry.
+function setCarryover_(p) {
+  var ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var tab = ss.getSheetByName(TABS.carryover.name) || ss.insertSheet(TABS.carryover.name);
+  ensureHeader_(tab, TABS.carryover);
+  var label = String(p.label), platform = String(p.platform || 'Google'), month = String(p.month);
+  var amount = Number(p.amount) || 0, note = String(p.note || '');
+  var values = tab.getDataRange().getValues();
+  var head = headIndex_(values[0]);
+  var found = -1;
+  for (var r = 1; r < values.length; r++) {
+    if (String(values[r][head.Label]).trim() === label &&
+        String(values[r][head.Platform]).trim().toLowerCase() === platform.toLowerCase() &&
+        String(values[r][head.Month]).trim() === month) { found = r + 1; break; }
+  }
+  if (amount <= 0) {                         // clear
+    if (found > 0) tab.deleteRow(found);
+  } else {
+    var rowVals = [label, platform, month, amount, note, new Date()];
+    if (found > 0) tab.getRange(found, 1, 1, rowVals.length).setValues([rowVals]);
+    else tab.appendRow(rowVals);
+    forceText_(tab, TABS.carryover);
+  }
   bustCache_();
   return { ok: true };
 }

@@ -76,6 +76,22 @@ budgets:
   the ledger). If a new split is permanent, set it directly in next month's
   budget column instead of logging a move.
 
+## Carryover (spending an earlier month's budget)
+
+When an account is spending a budget that was **booked in an earlier month**
+(already billed), it has no budget row for the current month — so it would show
+**NO BUDGET** and a **∞ pace**. Instead, log a **carryover**: click the ⚠ *no
+budget* chip (or the *carryover* chip) on that account's row and enter the ad
+spend to pace to for this month.
+
+- A carryover sets the account's **ad-spend target** for the month, so Pace and
+  On Target work normally and the NO BUDGET / ∞ flags clear.
+- It is **not billed again** — it adds nothing to Billings or Our Fee (the client
+  paid when it was originally booked).
+- It's per-month and explicit: enter it each month it carries, or `0` to clear.
+- Stored in its own `Carryover` tab (`Label, Platform, Month, Amount, Note`) via
+  the `setCarryover` gateway action — the `Budgets` tab is never touched.
+
 ## Fast read path (Netlify Functions + Blobs)
 
 Google's Apps Script web-app front end is slow and flaky — the script runs in
